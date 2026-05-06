@@ -28,7 +28,9 @@ final class FloatingStopPill {
 
         let pill = UIButton(type: .system)
         pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.backgroundColor = UIColor.systemRed
+        // Trace `--status-critical` (#E03A4E). Slightly more brand-on
+        // than systemRed without losing the "stop now" affordance.
+        pill.backgroundColor = UIColor(red: 0xE0/255.0, green: 0x3A/255.0, blue: 0x4E/255.0, alpha: 1)
         pill.setTitleColor(.white, for: .normal)
         pill.setImage(
             UIImage(systemName: "stop.fill")?.withRenderingMode(.alwaysTemplate),
@@ -39,10 +41,12 @@ final class FloatingStopPill {
         pill.titleLabel?.font = .systemFont(ofSize: 12, weight: .semibold)
         pill.contentEdgeInsets = UIEdgeInsets(top: 6, left: 10, bottom: 6, right: 12)
         pill.layer.cornerRadius = 14
-        pill.layer.shadowColor = UIColor.black.cgColor
-        pill.layer.shadowOffset = CGSize(width: 0, height: 2)
-        pill.layer.shadowOpacity = 0.25
-        pill.layer.shadowRadius = 4
+        // Soft cyan halo, mirrors `--shadow-glow` on web — keeps the
+        // shadow restrained and on-brand instead of generic black.
+        pill.layer.shadowColor = UIColor(red: 0x1F/255.0, green: 0xA2/255.0, blue: 0xE8/255.0, alpha: 1).cgColor
+        pill.layer.shadowOffset = CGSize(width: 0, height: 4)
+        pill.layer.shadowOpacity = 0.18
+        pill.layer.shadowRadius = 16
         pill.addTarget(self, action: #selector(handleTap), for: .touchUpInside)
 
         root.view.addSubview(pill)

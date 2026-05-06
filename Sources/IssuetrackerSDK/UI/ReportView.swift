@@ -3,9 +3,10 @@ import UIKit
 
 // Popover shown when the user shakes the device (or calls report()
 // explicitly). Deliberately minimal — title, optional description,
-// screenshot thumbnail, submit. No priority/assignee/labels from the
-// SDK; server-side everything defaults (priority=none, unassigned,
-// state=todo, source=sdk).
+// type picker, screenshot thumbnail, optional video, submit. No
+// priority/assignee/labels from the SDK; server-side everything
+// defaults (priority=none, unassigned, state=todo, source=sdk).
+//
 // Draft state survives the sheet being dismissed during recording.
 // Populated from the current ReportView on "Record video" and
 // re-applied when the sheet comes back. Everything's optional so the
@@ -19,8 +20,9 @@ struct ReportDraft {
 }
 
 struct ReportView: View {
-    // Now @State because the editor can replace it with an annotated
-    // version. Original is retained via editedScreenshot being nil.
+    // @State because the editor can replace it with an annotated
+    // version. Original is retained via the editor only emitting an
+    // edited image when the user confirms.
     @State var screenshot: UIImage?
     @State var videoURL: URL?
     let initialDraft: ReportDraft?
@@ -40,139 +42,245 @@ struct ReportView: View {
     @State private var showingEditor: Bool = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                if !reporterName.isEmpty {
-                    Section {
-                        HStack {
-                            Text("Reporting as \(reporterName)")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Not you?") {
-                                onChangeName(currentDraft())
-                            }
-                            .font(.footnote)
-                            .disabled(isSubmitting)
-                        }
+        VStack(spacing: 0) {
+            header
+            Divider().background(Tokens.lineFaint)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Tokens.Space.s5) {
+                    if !reporterName.isEmpty {
+                        reportingAsRow
                     }
-                }
-
-                Section {
-                    Picker("Type", selection: $type) {
-                        ForEach(IssueReportType.allCases, id: \.self) { t in
-                            Label(t.displayName, systemImage: t.icon).tag(t)
-                        }
-                    }
-                    TextField("What happened?", text: $title)
-                        .textInputAutocapitalization(.sentences)
-                    TextField("Steps, expected vs. actual, anything else…",
-                              text: $description,
-                              axis: .vertical)
-                        .lineLimit(3...8)
-                }
-
-                if let screenshot {
-                    Section {
-                        Toggle("Include screenshot", isOn: $includeScreenshot)
-                        if includeScreenshot {
-                            Button {
-                                showingEditor = true
-                            } label: {
-                                ZStack(alignment: .topTrailing) {
-                                    Image(uiImage: screenshot)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(maxHeight: 200)
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                                    Image(systemName: "pencil.tip.crop.circle")
-                                        .foregroundStyle(.white, .black.opacity(0.6))
-                                        .font(.title2)
-                                        .padding(6)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                Section {
-                    if let videoURL {
-                        Toggle("Include video", isOn: $includeVideo)
-                        if includeVideo {
-                            HStack {
-                                Image(systemName: "video.fill")
-                                    .foregroundStyle(.red)
-                                Text(videoSummary(url: videoURL))
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Remove", role: .destructive) {
-                                    self.videoURL = nil
-                                }
-                                .font(.footnote)
-                            }
-                            if videoTooLarge(url: videoURL) {
-                                Text("Recording is larger than 20 MB — trim it to include it with the report.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                    } else {
-                        Button {
-                            onStartRecording(currentDraft())
-                        } label: {
-                            Label("Record video", systemImage: "record.circle")
-                        }
-                    }
-                }
-
-                if let error {
-                    Section {
+                    titleField
+                    typeField
+                    descriptionField
+                    if let screenshot { screenshotSection(screenshot: screenshot) }
+                    videoSection
+                    if let error {
                         Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Tokens.critical)
                     }
                 }
+                .padding(Tokens.Space.s5)
             }
-            .navigationTitle("Report an issue")
-            .navigationBarTitleDisplayMode(.inline)
-            .fullScreenCover(isPresented: $showingEditor) {
-                if let current = screenshot {
-                    ScreenshotEditorView(originalImage: current) { edited in
-                        showingEditor = false
-                        if let edited { screenshot = edited }
+            Divider().background(Tokens.lineFaint)
+            footer
+        }
+        .background(Tokens.surfaceCard)
+        .fullScreenCover(isPresented: $showingEditor) {
+            if let current = screenshot {
+                ScreenshotEditorView(originalImage: current) { edited in
+                    showingEditor = false
+                    if let edited { screenshot = edited }
+                }
+            }
+        }
+        .onAppear {
+            guard let d = initialDraft else { return }
+            if title.isEmpty { title = d.title }
+            if description.isEmpty { description = d.description }
+            type = d.type
+            if screenshot == nil { screenshot = d.screenshot }
+            if videoURL == nil { videoURL = d.videoURL }
+        }
+    }
+
+    // MARK: - Sections
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: Tokens.Space.s4) {
+            BrandHeader(
+                title: "Tell us what broke",
+                subtitle: "Goes to the team triaging this app."
+            )
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Tokens.fg3)
+                    .frame(width: 32, height: 32)
+            }
+            .disabled(isSubmitting)
+        }
+        .padding(.horizontal, Tokens.Space.s5)
+        .padding(.vertical, Tokens.Space.s4)
+    }
+
+    private var reportingAsRow: some View {
+        HStack(spacing: 8) {
+            Text("Reporting as \(reporterName)")
+                .font(.system(size: 12))
+                .foregroundStyle(Tokens.fg3)
+            Spacer()
+            Button("Not you?") {
+                onChangeName(currentDraft())
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Tokens.accent)
+            .disabled(isSubmitting)
+        }
+    }
+
+    private var titleField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FieldLabel(title: "Title")
+            BrandTextField(
+                value: $title,
+                placeholder: "Short summary, e.g. checkout button does nothing"
+            )
+        }
+    }
+
+    private var typeField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FieldLabel(title: "Type")
+            HStack(spacing: 6) {
+                ForEach(IssueReportType.allCases, id: \.self) { t in
+                    BrandChip(
+                        t.displayName,
+                        icon: sfSymbol(for: t),
+                        isActive: type == t
+                    ) {
+                        type = t
                     }
                 }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onClose)
-                        .disabled(isSubmitting)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task { await perform() }
-                    } label: {
-                        if isSubmitting {
-                            ProgressView()
-                        } else {
-                            Text("Send")
-                        }
-                    }
-                    .disabled(isSubmitting || title.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            .onAppear {
-                guard let d = initialDraft else { return }
-                if title.isEmpty { title = d.title }
-                if description.isEmpty { description = d.description }
-                type = d.type
-                if screenshot == nil { screenshot = d.screenshot }
-                if videoURL == nil { videoURL = d.videoURL }
             }
         }
     }
+
+    private var descriptionField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FieldLabel(title: "What happened?")
+            BrandTextField(
+                value: $description,
+                placeholder: "What did you expect, and what happened instead?",
+                multiline: true
+            )
+        }
+    }
+
+    private func screenshotSection(screenshot: UIImage) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                FieldLabel(title: "Screenshot")
+                Spacer()
+                Toggle("", isOn: $includeScreenshot)
+                    .labelsHidden()
+                    .tint(Tokens.accent)
+            }
+            if includeScreenshot {
+                Button {
+                    showingEditor = true
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(uiImage: screenshot)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 200)
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusMd))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Tokens.radiusMd)
+                                    .stroke(Tokens.line, lineWidth: 1)
+                            )
+                        HStack(spacing: 4) {
+                            Image(systemName: "pencil.tip")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("Edit")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Tokens.surfaceCard)
+                        .foregroundStyle(Tokens.fg1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Tokens.radiusSm)
+                                .stroke(Tokens.line, lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusSm))
+                        .padding(8)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var videoSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            FieldLabel(title: "Recording")
+            if let videoURL {
+                videoRow(url: videoURL)
+            } else {
+                BrandButton("Record video", icon: "record.circle", variant: .secondary) {
+                    onStartRecording(currentDraft())
+                }
+            }
+        }
+    }
+
+    private func videoRow(url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "video.fill")
+                    .foregroundStyle(Tokens.accent)
+                    .font(.system(size: 14, weight: .medium))
+                Text(videoSummary(url: url))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Tokens.fg1)
+                Spacer()
+                Toggle("", isOn: $includeVideo)
+                    .labelsHidden()
+                    .tint(Tokens.accent)
+                Button {
+                    self.videoURL = nil
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Tokens.fg3)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Tokens.surfaceCard)
+            .overlay(
+                RoundedRectangle(cornerRadius: Tokens.radiusSm)
+                    .stroke(Tokens.line, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusSm))
+            if videoTooLarge(url: url) {
+                Text("Recording is larger than 20 MB — trim it to include it with the report.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Tokens.warning)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            BrandButton("Cancel", variant: .ghost, isDisabled: isSubmitting) {
+                onClose()
+            }
+            .frame(maxWidth: 100)
+            BrandButton(
+                "Send report",
+                icon: "paperplane.fill",
+                variant: .primary,
+                isDisabled: title.trimmingCharacters(in: .whitespaces).isEmpty,
+                isLoading: isSubmitting
+            ) {
+                Task { await perform() }
+            }
+            .frame(maxWidth: 160)
+        }
+        .padding(Tokens.Space.s4)
+        .background(Tokens.surfaceApp)
+    }
+
+    // MARK: - Actions
 
     private func perform() async {
         isSubmitting = true
@@ -216,5 +324,15 @@ struct ReportView: View {
     private func fileSizeBytes(url: URL) -> Int64 {
         return (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
     }
-}
 
+    private func sfSymbol(for type: IssueReportType) -> String {
+        // Map IssueReportType to an SF Symbol that's roughly equivalent
+        // to the Lucide icons in the design system reference (`bug`,
+        // `checkmark.square`, `book.closed`).
+        switch type {
+        case .bug: return "ladybug.fill"
+        case .task: return "checklist"
+        case .story: return "book.closed.fill"
+        }
+    }
+}

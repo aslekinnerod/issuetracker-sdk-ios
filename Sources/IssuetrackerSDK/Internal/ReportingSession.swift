@@ -96,14 +96,15 @@ enum ReportingSession {
             videoURL: videoURL,
             initialDraft: draft,
             reporterName: ReporterIdentity.name ?? "",
-            submit: { title, description, type, includeScreenshot, includeVideoURL in
+            submit: { title, description, type, includeScreenshot, includeVideoURL, onState in
                 await submit(
                     runtime: runtime,
                     title: title,
                     description: description,
                     type: type,
                     screenshot: includeScreenshot ? screenshot : nil,
-                    videoURL: includeVideoURL
+                    videoURL: includeVideoURL,
+                    onState: onState
                 )
             },
             onStartRecording: { capturedDraft in
@@ -184,9 +185,11 @@ enum ReportingSession {
         description: String,
         type: IssueReportType,
         screenshot: UIImage?,
-        videoURL: URL?
+        videoURL: URL?,
+        onState: @MainActor @escaping (IssueProgressState) -> Void
     ) async -> Result<Void, Error> {
         struct CreateResult: Decodable { let issueId: String }
+        let machine = UploadProgressMachine(onState: onState)
         do {
             var payload: [String: Any] = [
                 "apiKey": runtime.apiKey,
@@ -233,13 +236,18 @@ enum ReportingSession {
                     return dict
                 }
             }
-            let _: CreateResult = try await APIClient.call(
+            machine.reportStart()
+            let result: CreateResult = try await APIClient.uploadWithProgress(
                 endpoint: runtime.endpoint,
                 function: "createIssueFromSdk",
-                payload: payload
+                payload: payload,
+                onProgress: { fraction in machine.reportProgress(fraction) },
+                onProcessing: { machine.reportProcessing() }
             )
+            machine.reportDone(issueId: result.issueId)
             return .success(())
         } catch {
+            machine.reportError(error.localizedDescription)
             return .failure(error)
         }
     }

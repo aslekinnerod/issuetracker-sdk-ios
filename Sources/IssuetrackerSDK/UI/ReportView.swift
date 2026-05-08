@@ -27,7 +27,14 @@ struct ReportView: View {
     @State var videoURL: URL?
     let initialDraft: ReportDraft?
     let reporterName: String
-    let submit: (_ title: String, _ description: String, _ type: IssueReportType, _ includeScreenshot: Bool, _ videoURL: URL?) async -> Result<Void, Error>
+    let submit: (
+        _ title: String,
+        _ description: String,
+        _ type: IssueReportType,
+        _ includeScreenshot: Bool,
+        _ videoURL: URL?,
+        _ onState: @MainActor @escaping (IssueProgressState) -> Void
+    ) async -> Result<Void, Error>
     let onStartRecording: (ReportDraft) -> Void
     let onChangeName: (ReportDraft) -> Void
     let onClose: () -> Void
@@ -35,36 +42,49 @@ struct ReportView: View {
     @State private var title: String = ""
     @State private var description: String = ""
     @State private var type: IssueReportType = .bug
-    @State private var isSubmitting = false
     @State private var error: String?
     @State private var includeScreenshot: Bool = true
     @State private var includeVideo: Bool = true
     @State private var showingEditor: Bool = false
+    @State private var progressState: IssueProgressState?
+
+    private var isSending: Bool { progressState != nil }
+    private var isSubmitting: Bool {
+        guard let p = progressState else { return false }
+        switch p.phase {
+        case .idle, .uploading, .processing, .stalled: return true
+        case .done, .error: return false
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider().background(Tokens.lineFaint)
-            ScrollView {
-                VStack(alignment: .leading, spacing: Tokens.Space.s5) {
-                    if !reporterName.isEmpty {
-                        reportingAsRow
+            if let progressState {
+                sendingContent(state: progressState)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Tokens.Space.s5) {
+                        if !reporterName.isEmpty {
+                            reportingAsRow
+                        }
+                        titleField
+                        typeField
+                        descriptionField
+                        if let screenshot { screenshotSection(screenshot: screenshot) }
+                        videoSection
+                        if let error {
+                            Text(error)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Tokens.critical)
+                        }
                     }
-                    titleField
-                    typeField
-                    descriptionField
-                    if let screenshot { screenshotSection(screenshot: screenshot) }
-                    videoSection
-                    if let error {
-                        Text(error)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Tokens.critical)
-                    }
+                    .padding(Tokens.Space.s5)
                 }
-                .padding(Tokens.Space.s5)
+                Divider().background(Tokens.lineFaint)
+                footer
             }
-            Divider().background(Tokens.lineFaint)
-            footer
         }
         .background(Tokens.surfaceCard)
         .fullScreenCover(isPresented: $showingEditor) {
@@ -283,21 +303,71 @@ struct ReportView: View {
     // MARK: - Actions
 
     private func perform() async {
-        isSubmitting = true
-        defer { isSubmitting = false }
+        progressState = IssueProgressState(progress: 0, phase: .idle)
+        error = nil
 
         let result = await submit(
             title.trimmingCharacters(in: .whitespaces),
             description,
             type,
             includeScreenshot && screenshot != nil,
-            (includeVideo ? videoURL : nil)
+            (includeVideo ? videoURL : nil),
+            { state in
+                progressState = state
+            }
         )
         switch result {
         case .success:
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             onClose()
-        case .failure(let err):
-            error = err.localizedDescription
+        case .failure:
+            // Progress state already carries phase=error from the upload
+            // machine; UI shows retry/close from sendingContent.
+            break
+        }
+    }
+
+    @ViewBuilder
+    private func sendingContent(state: IssueProgressState) -> some View {
+        VStack(spacing: Tokens.Space.s5) {
+            Spacer(minLength: 0)
+            progressBar(for: type, state: state)
+                .padding(.horizontal, Tokens.Space.s5)
+            if state.phase == .error {
+                HStack(spacing: 8) {
+                    BrandButton("Close", variant: .ghost) { onClose() }
+                        .frame(maxWidth: 120)
+                    BrandButton("Retry", icon: "arrow.clockwise", variant: .primary) {
+                        Task { await perform() }
+                    }
+                    .frame(maxWidth: 160)
+                }
+                .padding(.horizontal, Tokens.Space.s5)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func progressBar(for type: IssueReportType, state: IssueProgressState) -> some View {
+        let displayTitle = title.trimmingCharacters(in: .whitespaces)
+        switch type {
+        case .bug:
+            BugProgressBar(
+                state: state,
+                title: displayTitle.isEmpty ? "Bug report" : displayTitle
+            )
+        case .task:
+            TaskProgressBar(
+                state: state,
+                title: displayTitle.isEmpty ? "Task" : displayTitle
+            )
+        case .story:
+            StoryProgressBar(
+                state: state,
+                title: displayTitle.isEmpty ? "Story" : displayTitle
+            )
         }
     }
 

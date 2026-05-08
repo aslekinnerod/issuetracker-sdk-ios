@@ -34,6 +34,22 @@ That's it. Shake the device anywhere in your app to bring up the reporter.
 
 Shake detection uses the accelerometer, so it works on real devices. In the simulator use `Issuetracker.report()` from a button to test.
 
+## Environments
+
+| Environment | Endpoint |
+| --- | --- |
+| Production | `https://api.issuetracker.no/v1` |
+| Staging | `https://issuetracker-api-staging.web.app/v1` |
+
+Use a staging API key when pointing at staging — production keys are not accepted there, and vice versa.
+
+```swift
+Issuetracker.configure(
+    apiKey: "it_staging_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    endpoint: URL(string: "https://issuetracker-api-staging.web.app/v1")!
+)
+```
+
 ## Manual trigger
 
 ```swift

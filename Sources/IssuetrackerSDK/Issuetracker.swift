@@ -20,6 +20,10 @@ public enum Issuetracker {
     ///     `https://europe-west1-<project>.cloudfunctions.net`.
     ///   - shakeToReport: If `true` (default), a device shake brings up
     ///     the reporter from anywhere in the app.
+    ///   - longPressToReport: If `true` (default), a two-finger
+    ///     long-press for 3 seconds anywhere in the app brings up the
+    ///     reporter. Same gesture as the web SDK uses on touch
+    ///     devices, so users only learn one trigger across platforms.
     ///   - enableCrashReporting: If `true` (default), the SDK detects
     ///     unexpectedly-ended sessions (crash, OOM kill, watchdog) and
     ///     opens an issue for them automatically. The decision is
@@ -32,12 +36,16 @@ public enum Issuetracker {
         apiKey: String,
         endpoint: URL,
         shakeToReport: Bool = true,
+        longPressToReport: Bool = true,
         enableCrashReporting: Bool = true
     ) {
         let rt = Runtime(apiKey: apiKey, endpoint: endpoint)
         runtime = rt
         if shakeToReport {
             ShakeObserver.install { Self.report() }
+        }
+        if longPressToReport {
+            LongPressObserver.install { Self.report() }
         }
         if enableCrashReporting {
             // Must run BEFORE anything else starts touching the

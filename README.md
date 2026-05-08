@@ -1,6 +1,6 @@
 # Issuetracker SDK for iOS
 
-Drop-in issue reporter for iOS apps. Shake the device (or call `Issuetracker.report()`) to capture a screenshot and file an issue directly into a pre-configured Issuetracker project.
+Drop-in issue reporter for iOS apps. Shake the device, two-finger long-press for 3 seconds, or call `Issuetracker.report()` — capture a screenshot and file an issue directly into a pre-configured Issuetracker project.
 
 ## Install
 
@@ -30,9 +30,15 @@ struct MyApp: App {
 }
 ```
 
-That's it. Shake the device anywhere in your app to bring up the reporter.
+That's it. Either gesture brings up the reporter:
 
-Shake detection uses the accelerometer, so it works on real devices. In the simulator use `Issuetracker.report()` from a button to test.
+| Trigger | Notes |
+| --- | --- |
+| Shake the device | Accelerometer-based — real devices only, not the simulator |
+| Two-finger long-press for 3 seconds | Anywhere in the app; works in the simulator too |
+| `Issuetracker.report()` | Programmatic, e.g. from a "Report a bug" menu item |
+
+Both gestures are enabled by default. Disable individually via `shakeToReport: false` or `longPressToReport: false` on `configure(...)`.
 
 ## Environments
 

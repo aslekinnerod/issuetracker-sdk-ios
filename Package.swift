@@ -10,5 +10,10 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(name: "IssuetrackerSDK"),
+        .testTarget(
+            name: "IssuetrackerSDKTests",
+            dependencies: ["IssuetrackerSDK"],
+            resources: [.copy("Resources/test-vectors.json")]
+        ),
     ]
 )

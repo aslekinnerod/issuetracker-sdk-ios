@@ -1,0 +1,151 @@
+{
+  "$comment": "Snapshot test cases. Each entry is a state shape and the expected visual outcome for the bug variant by default. Implementations must produce a stable snapshot for each. Use these as the seed set for golden-image / widget tests.",
+  "$schema_notes": {
+    "expect": "Default expectations. Apply to every variant unless variantOverrides supplies a key for that variant.",
+    "variantOverrides": "Optional. Map from variant key ('bug' | 'task' | 'story') to a partial 'expect' object. Each field present overrides the default; absent fields fall back to 'expect'."
+  },
+  "cases": [
+    {
+      "id": "idle-bug",
+      "state": { "progress": 0, "phase": "idle" },
+      "expect": {
+        "fillWidthPercent": 0,
+        "badgeText": "0%",
+        "statusContains": "Ready",
+        "tintIsError": false,
+        "indeterminateActive": false
+      }
+    },
+    {
+      "id": "uploading-25",
+      "state": { "progress": 0.25, "phase": "uploading" },
+      "expect": {
+        "fillWidthPercent": 25,
+        "badgeText": "25%",
+        "statusContains": "Uploading",
+        "tintIsError": false,
+        "indeterminateActive": false,
+        "iconWobbles": true
+      },
+      "variantOverrides": {
+        "task":  { "statusContains": "Filing",     "iconWobbles": false },
+        "story": { "statusContains": "Publishing", "iconWobbles": false }
+      }
+    },
+    {
+      "id": "uploading-99",
+      "state": { "progress": 0.99, "phase": "uploading" },
+      "expect": {
+        "fillWidthPercent": 99,
+        "badgeText": "99%",
+        "tintIsError": false
+      }
+    },
+    {
+      "id": "processing",
+      "state": { "progress": 1.0, "phase": "processing" },
+      "expect": {
+        "indeterminateActive": true,
+        "deterministicFillVisible": false,
+        "statusContains": "…",
+        "iconWobbles": false
+      }
+    },
+    {
+      "id": "stalled-mid",
+      "state": { "progress": 0.42, "phase": "stalled" },
+      "expect": {
+        "fillWidthPercent": 42,
+        "fillIsAnimating": false,
+        "statusContains": "Waiting",
+        "tintIsError": false,
+        "iconWobbles": false
+      }
+    },
+    {
+      "id": "error-mid",
+      "state": { "progress": 0.6, "phase": "error", "error": "Network connection lost" },
+      "expect": {
+        "fillWidthPercent": 60,
+        "tintIsError": true,
+        "statusEquals": "Network connection lost",
+        "iconWobbles": false
+      }
+    },
+    {
+      "id": "error-zero",
+      "state": { "progress": 0, "phase": "error", "error": "Permission denied" },
+      "expect": {
+        "fillWidthPercent": 0,
+        "tintIsError": true,
+        "statusEquals": "Permission denied"
+      }
+    },
+    {
+      "id": "done-with-id",
+      "state": { "progress": 1.0, "phase": "done", "issueId": "BUG-2418" },
+      "expect": {
+        "fillWidthPercent": 100,
+        "badgeText": "BUG-2418",
+        "indeterminateActive": false,
+        "statusContains": "."
+      },
+      "$comment": "Server-supplied issueId renders verbatim across every variant."
+    },
+    {
+      "id": "done-no-id",
+      "state": { "progress": 1.0, "phase": "done" },
+      "expect": {
+        "fillWidthPercent": 100,
+        "badgeText": "BUG-—"
+      },
+      "variantOverrides": {
+        "task":  { "badgeText": "TSK-—" },
+        "story": { "badgeText": "STY-—" }
+      },
+      "$comment": "Fallback id placeholder when no issueId is supplied; prefix differs per variant."
+    },
+    {
+      "id": "long-error-truncates",
+      "state": { "progress": 0.3, "phase": "error", "error": "A very long error message that should be truncated with an ellipsis when it exceeds the available width of the status row in the card" },
+      "expect": {
+        "statusTruncates": true,
+        "tintIsError": true
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "id": "happy-path",
+      "sequence": ["idle", "uploading@0.1", "uploading@0.5", "uploading@1.0", "processing", "done"],
+      "expect": {
+        "fillNeverGoesBackwards": true,
+        "noPhaseSkipsAllowedExcept": ["uploading→done (very-fast upload)"]
+      }
+    },
+    {
+      "id": "stall-recover",
+      "sequence": ["idle", "uploading@0.4", "stalled@0.4", "uploading@0.5", "uploading@1.0", "processing", "done"],
+      "expect": {
+        "fillFrozenDuringStall": true,
+        "fillResumesFromStallPosition": true
+      }
+    },
+    {
+      "id": "fail-mid",
+      "sequence": ["idle", "uploading@0.6", "error@0.6"],
+      "expect": {
+        "fillRemainsAtLastProgress": true,
+        "tintBecomesError": true
+      }
+    },
+    {
+      "id": "host-reset",
+      "sequence": ["idle", "uploading@0.5", "error@0.5", "idle"],
+      "expect": {
+        "componentReturnsToIdleState": true,
+        "noLingeringErrorTint": true
+      }
+    }
+  ]
+}

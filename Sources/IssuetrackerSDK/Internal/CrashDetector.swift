@@ -4,20 +4,22 @@ import UIKit
 // Heartbeat-style crash detection without signal handlers. The rules:
 //
 // 1. On SDK configure, we write a "session-alive" marker to disk.
-// 2. On willTerminate (which iOS fires for clean shutdowns), we
+// 2. On lifecycle events (background/foreground/active/inactive) we
+//    refresh the marker so it always reflects the latest known state
+//    plus a recent timestamp.
+// 3. On willTerminate (which iOS fires for clean shutdowns), we
 //    remove the marker.
-// 3. At the next configure, if the marker is still there, we treat
-//    the previous session as having ended unexpectedly — crash, OOM
-//    kill, or force-quit. False positives from force-quit are
-//    acceptable for MVP; triagers can dismiss.
-//
-// Breadcrumbs are read from BreadcrumbStore and attached to the
-// auto-generated crash report before the new session overwrites them.
+// 4. At the next configure, if the marker is still there, the previous
+//    session ended unexpectedly. The marker alone CAN'T distinguish
+//    crash, OOM, watchdog, or force-quit — we hand it to MetricKit
+//    via PendingCrashStore for confirmation.
 struct SessionMarker: Codable {
     let sessionId: String
     let startedAt: Date
+    var endedAt: Date
     let appVersion: String?
     let osVersion: String?
+    var lastLifecycleState: LifecycleState
 }
 
 @MainActor
@@ -40,8 +42,9 @@ final class CrashDetector {
     }
 
     // Returns the previous session's marker IF it exists — meaning
-    // the previous session didn't reach willTerminate. Caller reports
-    // it, then calls startNewSession() to install a fresh one.
+    // the previous session didn't reach willTerminate. Caller moves
+    // it to PendingCrashStore, then calls startNewSession() to install
+    // a fresh one.
     func readUnfinishedSession() -> SessionMarker? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         let decoder = JSONDecoder()
@@ -49,32 +52,59 @@ final class CrashDetector {
         return try? decoder.decode(SessionMarker.self, from: data)
     }
 
-    // Writes a new session marker and hooks up the cleanup handler.
+    // Writes a new session marker and hooks up the lifecycle handlers.
     // Safe to call once per configure — repeats are a no-op.
     func startNewSession() {
         guard currentMarker == nil else { return }
+        let now = Date()
         let marker = SessionMarker(
             sessionId: UUID().uuidString,
-            startedAt: Date(),
+            startedAt: now,
+            endedAt: now,
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
-            osVersion: UIDevice.current.systemVersion
+            osVersion: UIDevice.current.systemVersion,
+            lastLifecycleState: .active
         )
         currentMarker = marker
         persist(marker)
 
-        NotificationCenter.default.addObserver(
+        let nc = NotificationCenter.default
+        nc.addObserver(
             self,
             selector: #selector(handleWillTerminate),
             name: UIApplication.willTerminateNotification,
             object: nil
         )
+        nc.addObserver(
+            self,
+            selector: #selector(handleDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleWillResignActive),
+            name: UIApplication.willResignActiveNotification,
+            object: nil
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
     }
 
-    // Consumes the stale marker (after reporting it). Call this
-    // AFTER startNewSession so the new marker isn't removed too.
+    // Consumes the stale marker (after handing it to PendingCrashStore).
+    // Call this AFTER startNewSession so the new marker isn't removed.
     func clearUnfinishedMarker() {
         try? FileManager.default.removeItem(at: fileURL)
-        // Re-persist the current marker since remove wiped the file.
         if let currentMarker {
             persist(currentMarker)
         }
@@ -82,6 +112,30 @@ final class CrashDetector {
 
     @objc private func handleWillTerminate() {
         try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    @objc private func handleDidBecomeActive() {
+        updateLifecycle(.active)
+    }
+
+    @objc private func handleWillResignActive() {
+        updateLifecycle(.inactive)
+    }
+
+    @objc private func handleDidEnterBackground() {
+        updateLifecycle(.background)
+    }
+
+    @objc private func handleWillEnterForeground() {
+        updateLifecycle(.inactive)
+    }
+
+    private func updateLifecycle(_ state: LifecycleState) {
+        guard var marker = currentMarker else { return }
+        marker.lastLifecycleState = state
+        marker.endedAt = Date()
+        currentMarker = marker
+        persist(marker)
     }
 
     private func persist(_ marker: SessionMarker) {

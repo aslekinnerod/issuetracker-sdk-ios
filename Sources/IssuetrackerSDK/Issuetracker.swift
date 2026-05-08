@@ -20,11 +20,13 @@ public enum Issuetracker {
     ///     `https://europe-west1-<project>.cloudfunctions.net`.
     ///   - shakeToReport: If `true` (default), a device shake brings up
     ///     the reporter from anywhere in the app.
-    ///   - enableCrashReporting: If `true` (default), the SDK writes a
-    ///     session-alive marker at launch and auto-sends a crash
-    ///     report on the next launch if the previous session ended
-    ///     without calling willTerminate (crash, OOM kill, or
-    ///     force-quit).
+    ///   - enableCrashReporting: If `true` (default), the SDK detects
+    ///     unexpectedly-ended sessions (crash, OOM kill, watchdog) and
+    ///     opens an issue for them automatically. The decision is
+    ///     deferred until MetricKit confirms the cause — Apple delivers
+    ///     `MXCrashDiagnostic` and `MXAppExitMetric` 0–24h after the
+    ///     event, on the next launch. Force-quits and normal exits are
+    ///     suppressed silently.
     @MainActor
     public static func configure(
         apiKey: String,
@@ -39,13 +41,14 @@ public enum Issuetracker {
         }
         if enableCrashReporting {
             // Must run BEFORE anything else starts touching the
-            // breadcrumb store in this session — CrashReporter reads
-            // and clears crumbs from the crashed session before the
-            // new one starts writing.
-            CrashReporter.reportCrashIfAny(runtime: rt)
-            // MetricKit delivers its own, slower but richer crash
-            // diagnostics independently. Subscribing here means we
-            // pick them up any time during this session.
+            // breadcrumb store in this session — the previous
+            // session's crumbs are captured here and moved into the
+            // pending marker before the new session overwrites them.
+            CrashReporter.reportCrashIfAny()
+            // MetricKit delivers crash diagnostics and exit metrics
+            // 0–24h after the event. The subscriber owns the decision
+            // to promote pending markers into issues — heartbeat alone
+            // can't tell crashes from force-quits.
             MetricKitSubscriber.shared.start(runtime: rt)
         }
     }
@@ -78,8 +81,9 @@ public enum Issuetracker {
     }
 
     /// Records a single user action. The SDK keeps the most recent 5
-    /// and attaches them to any report the user submits (and, when
-    /// enabled, to an auto-generated crash report on the next launch).
+    /// and attaches them to any report the user submits, and to any
+    /// auto-generated crash report (which lands once MetricKit confirms
+    /// the previous session crashed — typically within 24h).
     ///
     /// Safe to call before `configure()` — breadcrumbs are persisted
     /// locally and will be included in the next report.
@@ -97,9 +101,11 @@ public enum Issuetracker {
     }
 
     /// Deliberately crashes the app so you can verify the
-    /// auto-generated crash report flows through on the next launch.
-    /// Only intended for SDK integration testing — do not ship calls
-    /// to this from production code.
+    /// auto-generated crash report flow. The crash is detected by
+    /// MetricKit, so the resulting issue lands 0–24h after the next
+    /// launch — not immediately. Run on a real device; MetricKit does
+    /// not deliver in the simulator. Only intended for SDK integration
+    /// testing — do not ship calls to this from production code.
     public static func _testCrash() -> Never {
         fatalError("Issuetracker._testCrash() triggered")
     }

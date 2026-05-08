@@ -1,53 +1,69 @@
 import Foundation
 
-// Ties together CrashDetector + BreadcrumbStore + APIClient. On
-// configure, if the previous session didn't reach willTerminate, we
-// build an auto-report and POST it to createIssueFromSdk.
+// At configure-time, we don't know whether last session ended in a
+// real crash or in a force-quit/normal exit. So instead of POSTing
+// immediately (which produced a flood of false positives), we move
+// the stale marker to PendingCrashStore and let MetricKitSubscriber
+// decide later — when it sees an MXAppExitMetric or MXCrashDiagnostic
+// covering the same period — whether to promote the pending marker
+// to a real issue or discard it.
 @MainActor
 enum CrashReporter {
 
-    // Called from Issuetracker.configure. Fires-and-forgets in a Task
-    // so app startup isn't blocked on the network round-trip. A
-    // failure just leaves the marker in place — next launch retries.
-    static func reportCrashIfAny(runtime: Runtime) {
-        guard let marker = CrashDetector.shared.readUnfinishedSession() else {
-            // Clean previous shutdown; nothing to report. Just start
-            // a fresh session.
+    static func reportCrashIfAny() {
+        if let marker = CrashDetector.shared.readUnfinishedSession() {
+            let crumbs = BreadcrumbStore.shared.snapshot()
+            BreadcrumbStore.shared.clear()
+            PendingCrashStore.shared.add(PendingCrashMarker(
+                sessionId: marker.sessionId,
+                startedAt: marker.startedAt,
+                endedAt: marker.endedAt,
+                appVersion: marker.appVersion,
+                osVersion: marker.osVersion,
+                lastLifecycleState: marker.lastLifecycleState,
+                breadcrumbs: crumbs
+            ))
             CrashDetector.shared.startNewSession()
-            return
+            CrashDetector.shared.clearUnfinishedMarker()
+        } else {
+            CrashDetector.shared.startNewSession()
         }
 
-        // Grab breadcrumbs from the crashed session before we clear
-        // them for the new one.
-        let crumbs = BreadcrumbStore.shared.snapshot()
-        BreadcrumbStore.shared.clear()
-        CrashDetector.shared.startNewSession()
-        CrashDetector.shared.clearUnfinishedMarker()
-
-        Task.detached {
-            await sendCrashReport(runtime: runtime, marker: marker, breadcrumbs: crumbs)
-        }
+        PendingCrashStore.shared.prune()
     }
 
-    private static func sendCrashReport(
+    static func sendConfirmedCrash(
         runtime: Runtime,
-        marker: SessionMarker,
-        breadcrumbs: [Breadcrumb]
+        marker: PendingCrashMarker,
+        cause: ConfirmedCrashCause
     ) async {
-        let description = buildDescription(marker: marker, breadcrumbs: breadcrumbs)
+        let description = buildDescription(marker: marker, cause: cause)
+        var crashReport: [String: Any] = [
+            "detectedAt": Int(Date().timeIntervalSince1970 * 1000),
+            "sessionId": marker.sessionId,
+            "cause": cause.wireValue,
+        ]
+        if let extra = cause.metricPayloadJSON {
+            crashReport["metricPayload"] = extra
+        }
+        if let exceptionName = cause.exceptionName {
+            crashReport["exceptionName"] = exceptionName
+        }
+        if let exceptionReason = cause.exceptionReason {
+            crashReport["exceptionReason"] = exceptionReason
+        }
+
         var payload: [String: Any] = [
             "apiKey": runtime.apiKey,
-            "title": "Crash in previous session",
+            "title": cause.title,
             "type": "bug",
             "description": description,
             "context": await MainActor.run { ContextCollector.collect() },
             "reporter": ReporterIdentity.payload(),
-            "crashReport": [
-                "detectedAt": Int(Date().timeIntervalSince1970 * 1000),
-            ] as [String: Any],
+            "crashReport": crashReport,
         ]
-        if !breadcrumbs.isEmpty {
-            payload["breadcrumbs"] = breadcrumbs.map { b -> [String: Any] in
+        if !marker.breadcrumbs.isEmpty {
+            payload["breadcrumbs"] = marker.breadcrumbs.map { b -> [String: Any] in
                 var dict: [String: Any] = [
                     "timestamp": Int(b.timestamp.timeIntervalSince1970 * 1000),
                     "action": b.action,
@@ -72,26 +88,30 @@ enum CrashReporter {
     }
 
     private static func buildDescription(
-        marker: SessionMarker,
-        breadcrumbs: [Breadcrumb]
+        marker: PendingCrashMarker,
+        cause: ConfirmedCrashCause
     ) -> String {
         var lines: [String] = []
-        lines.append("The previous app session ended unexpectedly.")
+        lines.append(cause.descriptionHeadline)
         lines.append("")
         lines.append("Session ID: \(marker.sessionId)")
         let df = ISO8601DateFormatter()
         df.formatOptions = [.withInternetDateTime]
         lines.append("Started: \(df.string(from: marker.startedAt))")
+        if let endedAt = marker.endedAt {
+            lines.append("Last seen: \(df.string(from: endedAt))")
+        }
+        lines.append("Last state: \(marker.lastLifecycleState.rawValue)")
         if let appVersion = marker.appVersion {
             lines.append("App version: \(appVersion)")
         }
         if let osVersion = marker.osVersion {
             lines.append("iOS: \(osVersion)")
         }
-        if !breadcrumbs.isEmpty {
+        if !marker.breadcrumbs.isEmpty {
             lines.append("")
             lines.append("Recent actions (oldest first):")
-            for b in breadcrumbs {
+            for b in marker.breadcrumbs {
                 var line = "- [\(df.string(from: b.timestamp))] \(b.action)"
                 if let metadata = b.metadata, !metadata.isEmpty {
                     let pairs = metadata.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ")
@@ -101,5 +121,51 @@ enum CrashReporter {
             }
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+struct ConfirmedCrashCause {
+    let title: String
+    let descriptionHeadline: String
+    let wireValue: String
+    let exceptionName: String?
+    let exceptionReason: String?
+    let metricPayloadJSON: String?
+
+    static func crashDiagnostic(
+        exceptionName: String?,
+        exceptionReason: String?,
+        signal: Int?,
+        payloadJSON: String?
+    ) -> ConfirmedCrashCause {
+        var headline = "System-reported crash from MetricKit."
+        if let exceptionName {
+            headline += "\n\nException: \(exceptionName)"
+        }
+        if let exceptionReason, !exceptionReason.isEmpty {
+            headline += "\nReason: \(exceptionReason)"
+        }
+        if let signal {
+            headline += "\nSignal: \(signal)"
+        }
+        return ConfirmedCrashCause(
+            title: "Crash (\(exceptionName ?? "unknown"))",
+            descriptionHeadline: headline,
+            wireValue: "crash_diagnostic",
+            exceptionName: exceptionName,
+            exceptionReason: exceptionReason,
+            metricPayloadJSON: payloadJSON
+        )
+    }
+
+    static func appExit(reason: String) -> ConfirmedCrashCause {
+        ConfirmedCrashCause(
+            title: "Crash (\(reason))",
+            descriptionHeadline: "System-reported abnormal exit (\(reason)). No symbolicated stack available — Apple did not deliver a crash diagnostic for this session.",
+            wireValue: "app_exit_\(reason)",
+            exceptionName: nil,
+            exceptionReason: nil,
+            metricPayloadJSON: nil
+        )
     }
 }

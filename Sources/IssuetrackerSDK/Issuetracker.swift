@@ -141,10 +141,15 @@ struct Runtime {
     // time setting that the user owns; the store is the state machine.
     let onConfigurationError: ((SdkErrorReason) -> Void)?
 
-    // Staging-prefixed keys hit the staging environment; everything
-    // else hits production. Integrators never see either URL — they
-    // just paste the key the web UI gave them.
+    // Routing is derived from the key prefix so integrators never see
+    // any URL — they just paste the key the web UI gave them.
+    //   it_dev_*      → dev backend (internal use only)
+    //   it_staging_*  → staging backend
+    //   it_*          → production (brand-domain)
     static func resolveEndpoint(for apiKey: String) -> URL {
+        if apiKey.hasPrefix("it_dev_") {
+            return URL(string: "https://issuetracker-api-dev.web.app/v1")!
+        }
         if apiKey.hasPrefix("it_staging_") {
             return URL(string: "https://issuetracker-api-staging.web.app/v1")!
         }

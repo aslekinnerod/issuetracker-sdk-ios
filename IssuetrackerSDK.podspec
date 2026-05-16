@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'IssuetrackerSDK'
-  s.version          = '0.3.0'
+  s.version          = '0.4.0'
   s.summary          = 'Drop-in issue reporter SDK for iOS apps.'
   s.description      = <<~DESC
     Shake the device (or call Issuetracker.report()) to capture a

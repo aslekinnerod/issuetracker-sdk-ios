@@ -15,11 +15,45 @@ enum ReportingSession {
 
     @MainActor
     static func present(runtime: Runtime) {
+        // ADR-0003 Decision 9 pre-flight gate. When the SDK has been
+        // terminated (project deleted, key revoked, workspace
+        // suspended), every trigger that lands here shows the terminal
+        // message instead of the report form — no retry, no error
+        // code, no link back to our service. Survives app launches via
+        // LifecycleStore's UserDefaults persistence.
+        if LifecycleStore.shared.isTerminated {
+            presentTerminated()
+            return
+        }
         if ReporterIdentity.name == nil {
             presentNamePrompt(runtime: runtime, resumingDraft: nil)
         } else {
             presentInternal(runtime: runtime, draft: nil, initialScreenshot: nil)
         }
+    }
+
+    @MainActor
+    private static func presentTerminated() {
+        guard !presented else { return }
+        presented = true
+
+        let view = TerminatedView(onClose: {
+            topViewController()?.dismiss(animated: true) {
+                presented = false
+            }
+        })
+        let host = UIHostingController(rootView: view)
+        host.modalPresentationStyle = .formSheet
+        if let sheet = host.sheetPresentationController {
+            sheet.detents = [.medium()]
+            sheet.prefersGrabberVisible = true
+        }
+
+        guard let presenter = topViewController() else {
+            presented = false
+            return
+        }
+        presenter.present(host, animated: true)
     }
 
     // Shown before the report UI on first use (or when the user taps
@@ -246,6 +280,20 @@ enum ReportingSession {
             )
             machine.reportDone(issueId: result.issueId)
             return .success(())
+        } catch let err as APIClient.CallableError {
+            // ADR-0003 Decision 9: non-recoverable failures flip the
+            // SDK into one-way TERMINATED. The user sees this submit's
+            // error message in the current sheet; the next trigger
+            // (shake / long-press / programmatic) will hit the
+            // pre-flight gate in present() and surface TerminatedView.
+            if let reason = err.sdkErrorReason, !reason.isRecoverable {
+                LifecycleStore.shared.transitionToTerminated(
+                    reason: reason,
+                    callback: runtime.onConfigurationError
+                )
+            }
+            machine.reportError(err.localizedDescription)
+            return .failure(err)
         } catch {
             machine.reportError(error.localizedDescription)
             return .failure(error)

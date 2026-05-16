@@ -8,7 +8,22 @@ enum APIClient {
     struct CallableError: LocalizedError {
         let status: Int
         let message: String
+        // ADR-0003 Decision 9 structured payload, when the server sends
+        // one (i.e. for SDK-callables — older endpoints leave this nil).
+        let details: SdkErrorDetails?
+
         var errorDescription: String? { message }
+
+        /// Convenience: surfaces the typed reason when present.
+        var sdkErrorReason: SdkErrorReason? { details?.reason }
+    }
+
+    // Decode the `details` object Firebase callable bubbles up under
+    // `error.details`. Returns nil for any malformed shape so callers
+    // can fall back to the generic message-only error path.
+    private static func parseErrorDetails(_ json: [String: Any]) -> SdkErrorDetails? {
+        guard let raw = json["details"] as? [String: Any] else { return nil }
+        return SdkErrorDetails(json: raw)
     }
 
     static func call<Response: Decodable>(
@@ -26,17 +41,21 @@ enum APIClient {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw CallableError(status: 0, message: "Invalid response")
+            throw CallableError(status: 0, message: "Invalid response", details: nil)
         }
 
-        // Callable error shape: {"error": {"message": "...", "status": "..."}}
+        // Callable error shape: {"error": {"message": "...", "status": "...", "details": {...}}}
         if http.statusCode >= 400 {
             if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = dict["error"] as? [String: Any],
-               let msg = err["message"] as? String {
-                throw CallableError(status: http.statusCode, message: msg)
+               let err = dict["error"] as? [String: Any] {
+                let msg = (err["message"] as? String) ?? "HTTP \(http.statusCode)"
+                throw CallableError(
+                    status: http.statusCode,
+                    message: msg,
+                    details: parseErrorDetails(err)
+                )
             }
-            throw CallableError(status: http.statusCode, message: "HTTP \(http.statusCode)")
+            throw CallableError(status: http.statusCode, message: "HTTP \(http.statusCode)", details: nil)
         }
 
         let envelope = try JSONDecoder().decode(Envelope<Response>.self, from: data)
@@ -73,15 +92,19 @@ enum APIClient {
         await MainActor.run { onProcessing() }
 
         guard let http = response as? HTTPURLResponse else {
-            throw CallableError(status: 0, message: "Invalid response")
+            throw CallableError(status: 0, message: "Invalid response", details: nil)
         }
         if http.statusCode >= 400 {
             if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = dict["error"] as? [String: Any],
-               let msg = err["message"] as? String {
-                throw CallableError(status: http.statusCode, message: msg)
+               let err = dict["error"] as? [String: Any] {
+                let msg = (err["message"] as? String) ?? "HTTP \(http.statusCode)"
+                throw CallableError(
+                    status: http.statusCode,
+                    message: msg,
+                    details: parseErrorDetails(err)
+                )
             }
-            throw CallableError(status: http.statusCode, message: "HTTP \(http.statusCode)")
+            throw CallableError(status: http.statusCode, message: "HTTP \(http.statusCode)", details: nil)
         }
 
         let envelope = try JSONDecoder().decode(Envelope<Response>.self, from: data)

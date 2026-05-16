@@ -31,14 +31,29 @@ public enum Issuetracker {
     ///     `MXCrashDiagnostic` and `MXAppExitMetric` 0–24h after the
     ///     event, on the next launch. Force-quits and normal exits are
     ///     suppressed silently.
+    ///   - onConfigurationError: Optional callback invoked once when the
+    ///     SDK transitions to the terminated state because the server
+    ///     signalled a non-recoverable failure (project deleted, API
+    ///     key revoked, workspace suspended, etc. — see
+    ///     ``SdkErrorReason``). Default behaviour is silent in
+    ///     production; host apps may forward this to their own
+    ///     telemetry. Once invoked, the SDK will not call the report
+    ///     endpoint again for the lifetime of this install — recovery
+    ///     requires a fresh `configure(apiKey:)` (typically an app
+    ///     relaunch). See ADR-0003 Decision 9.
     @MainActor
     public static func configure(
         apiKey: String,
         shakeToReport: Bool = true,
         longPressToReport: Bool = true,
-        enableCrashReporting: Bool = true
+        enableCrashReporting: Bool = true,
+        onConfigurationError: ((SdkErrorReason) -> Void)? = nil
     ) {
-        let rt = Runtime(apiKey: apiKey, endpoint: Runtime.resolveEndpoint(for: apiKey))
+        let rt = Runtime(
+            apiKey: apiKey,
+            endpoint: Runtime.resolveEndpoint(for: apiKey),
+            onConfigurationError: onConfigurationError
+        )
         runtime = rt
         if shakeToReport {
             ShakeObserver.install { Self.report() }
@@ -121,6 +136,10 @@ public enum Issuetracker {
 struct Runtime {
     let apiKey: String
     let endpoint: URL
+    // Invoked exactly once, on the OK → TERMINATED transition. Stored
+    // here (rather than in LifecycleStore) because it's a configure-
+    // time setting that the user owns; the store is the state machine.
+    let onConfigurationError: ((SdkErrorReason) -> Void)?
 
     // Staging-prefixed keys hit the staging environment; everything
     // else hits production. Integrators never see either URL — they

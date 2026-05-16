@@ -212,6 +212,21 @@ enum ReportingSession {
         pendingDraft = nil
     }
 
+    // Submit-failure → terminal handoff. Dismisses any presented
+    // reporter / name-prompt / recording UI, lets the system modal
+    // transition settle, and presents the terminal view. Used by
+    // submit()'s non-recoverable-error path so the user's next sight
+    // is the authoritative TERMINATED state rather than a stale form
+    // with a generic error message.
+    @MainActor
+    private static func dismissAndPresentTerminated() async {
+        topViewController()?.dismiss(animated: true)
+        presented = false
+        pendingDraft = nil
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        presentTerminated()
+    }
+
     @MainActor
     private static func submit(
         runtime: Runtime,
@@ -282,15 +297,18 @@ enum ReportingSession {
             return .success(())
         } catch let err as APIClient.CallableError {
             // ADR-0003 Decision 9: non-recoverable failures flip the
-            // SDK into one-way TERMINATED. The user sees this submit's
-            // error message in the current sheet; the next trigger
-            // (shake / long-press / programmatic) will hit the
-            // pre-flight gate in present() and surface TerminatedView.
+            // SDK into one-way TERMINATED. Replace the in-progress
+            // submit sheet with TerminatedView so the user lands on
+            // the authoritative end-state immediately — no need to
+            // dismiss and re-trigger to discover bug reporting is gone.
             if let reason = err.sdkErrorReason, !reason.isRecoverable {
                 LifecycleStore.shared.transitionToTerminated(
                     reason: reason,
                     callback: runtime.onConfigurationError
                 )
+                Task { @MainActor in
+                    await dismissAndPresentTerminated()
+                }
             }
             machine.reportError(err.localizedDescription)
             return .failure(err)

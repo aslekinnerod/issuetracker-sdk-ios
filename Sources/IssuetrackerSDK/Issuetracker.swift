@@ -2,22 +2,22 @@ import Foundation
 import UIKit
 
 // Public facade for the Issuetracker SDK. Apps integrate by calling
-// `configure(apiKey:endpoint:)` once at launch; everything else is
-// driven by shake-to-report plus the optional programmatic `report()`
-// trigger. The type is `enum` with static members so there's no
-// instance to retain — same shape as Firebase's own SDKs.
+// `configure(apiKey:)` once at launch; everything else is driven by
+// shake-to-report plus the optional programmatic `report()` trigger.
+// The type is `enum` with static members so there's no instance to
+// retain — same shape as Firebase's own SDKs.
 public enum Issuetracker {
     @MainActor
     private static var runtime: Runtime?
 
-    /// Call once, as early as possible (e.g. `App.init`). The key and
-    /// endpoint are stored for the lifetime of the app; subsequent
-    /// calls replace the configuration.
+    /// Call once, as early as possible (e.g. `App.init`). The key is
+    /// stored for the lifetime of the app; subsequent calls replace
+    /// the configuration.
     ///
     /// - Parameters:
     ///   - apiKey: Raw API key created in the Issuetracker web UI.
-    ///   - endpoint: Firebase Functions base URL, e.g.
-    ///     `https://europe-west1-<project>.cloudfunctions.net`.
+    ///     The environment (production vs. staging) is derived from
+    ///     the key prefix — there is no endpoint to configure.
     ///   - shakeToReport: If `true` (default), a device shake brings up
     ///     the reporter from anywhere in the app.
     ///   - longPressToReport: If `true` (default), a two-finger
@@ -34,12 +34,11 @@ public enum Issuetracker {
     @MainActor
     public static func configure(
         apiKey: String,
-        endpoint: URL,
         shakeToReport: Bool = true,
         longPressToReport: Bool = true,
         enableCrashReporting: Bool = true
     ) {
-        let rt = Runtime(apiKey: apiKey, endpoint: endpoint)
+        let rt = Runtime(apiKey: apiKey, endpoint: Runtime.resolveEndpoint(for: apiKey))
         runtime = rt
         if shakeToReport {
             ShakeObserver.install { Self.report() }
@@ -122,6 +121,16 @@ public enum Issuetracker {
 struct Runtime {
     let apiKey: String
     let endpoint: URL
+
+    // Staging-prefixed keys hit the staging environment; everything
+    // else hits production. Integrators never see either URL — they
+    // just paste the key the web UI gave them.
+    static func resolveEndpoint(for apiKey: String) -> URL {
+        if apiKey.hasPrefix("it_staging_") {
+            return URL(string: "https://issuetracker-api-staging.web.app/v1")!
+        }
+        return URL(string: "https://api.issuetracker.no/v1")!
+    }
 }
 
 /// Issue classification sent to the server. Raw values match the

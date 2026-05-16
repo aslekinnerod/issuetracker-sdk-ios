@@ -21,10 +21,7 @@ import IssuetrackerSDK
 @main
 struct MyApp: App {
     init() {
-        Issuetracker.configure(
-            apiKey: "it_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-            endpoint: URL(string: "https://europe-west1-<your-firebase-project>.cloudfunctions.net")!
-        )
+        Issuetracker.configure(apiKey: "it_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
     }
     // ...
 }
@@ -40,21 +37,7 @@ That's it. Either gesture brings up the reporter:
 
 Both gestures are enabled by default. Disable individually via `shakeToReport: false` or `longPressToReport: false` on `configure(...)`.
 
-## Environments
-
-| Environment | Endpoint |
-| --- | --- |
-| Production | `https://api.issuetracker.no/v1` |
-| Staging | `https://issuetracker-api-staging.web.app/v1` |
-
-Use a staging API key when pointing at staging — production keys are not accepted there, and vice versa.
-
-```swift
-Issuetracker.configure(
-    apiKey: "it_staging_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    endpoint: URL(string: "https://issuetracker-api-staging.web.app/v1")!
-)
-```
+The SDK talks to Issuetracker's hosted backend — there is no endpoint to configure. Staging-prefixed keys (`it_staging_…`) are routed to the staging environment automatically; everything else hits production.
 
 ## Manual trigger
 

@@ -41,13 +41,23 @@ public enum Issuetracker {
     ///     endpoint again for the lifetime of this install — recovery
     ///     requires a fresh `configure(apiKey:)` (typically an app
     ///     relaunch). See ADR-0003 Decision 9.
+    ///   - showOnboarding: If `true`, presents a one-time popover on
+    ///     first launch that teaches the user which gestures trigger
+    ///     the reporter — only the gestures currently enabled are
+    ///     shown. Persisted per install via UserDefaults, so the
+    ///     popover never appears twice unless the host app calls
+    ///     ``Issuetracker/showOnboarding()`` explicitly. With both
+    ///     `shakeToReport` and `longPressToReport` disabled the
+    ///     popover is silently skipped — there's nothing to teach.
+    ///     Defaults to `false` so existing integrators are unaffected.
     @MainActor
     public static func configure(
         apiKey: String,
         shakeToReport: Bool = true,
         longPressToReport: Bool = true,
         enableCrashReporting: Bool = true,
-        onConfigurationError: ((SdkErrorReason) -> Void)? = nil
+        onConfigurationError: ((SdkErrorReason) -> Void)? = nil,
+        showOnboarding: Bool = false
     ) {
         let rt = Runtime(
             apiKey: apiKey,
@@ -61,6 +71,12 @@ public enum Issuetracker {
         if longPressToReport {
             LongPressObserver.install { Self.report() }
         }
+        if showOnboarding {
+            OnboardingPresenter.presentIfNeeded(
+                shakeEnabled: shakeToReport,
+                longPressEnabled: longPressToReport
+            )
+        }
         if enableCrashReporting {
             // Must run BEFORE anything else starts touching the
             // breadcrumb store in this session — the previous
@@ -73,6 +89,30 @@ public enum Issuetracker {
             // can't tell crashes from force-quits.
             MetricKitSubscriber.shared.start(runtime: rt)
         }
+    }
+
+    /// Re-presents the onboarding popover regardless of whether it
+    /// has been shown before on this install. Intended for a "Show
+    /// introduction again"-style entry in the host app's own settings
+    /// screen. Calling this with both gestures disabled is a no-op —
+    /// there is nothing to teach. Must be called after
+    /// ``configure(apiKey:shakeToReport:longPressToReport:enableCrashReporting:onConfigurationError:showOnboarding:)``.
+    @MainActor
+    public static func showOnboarding() {
+        guard let runtime else {
+            assertionFailure("Issuetracker.showOnboarding() called before configure()")
+            return
+        }
+        _ = runtime
+        // The runtime carries the configured-trigger state implicitly
+        // via the observers installed at configure-time. We re-derive
+        // from the installed observers rather than threading another
+        // flag through Runtime, so a single source of truth governs
+        // both runtime behaviour and onboarding content.
+        OnboardingPresenter.presentForced(
+            shakeEnabled: ShakeObserver.isInstalled,
+            longPressEnabled: LongPressObserver.isInstalled
+        )
     }
 
     /// Programmatically triggers the reporter — useful for a "report

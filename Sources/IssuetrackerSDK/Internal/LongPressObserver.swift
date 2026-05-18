@@ -18,6 +18,8 @@ enum LongPressObserver {
         attach()
     }
 
+    static var isInstalled: Bool { onTrigger != nil }
+
     private static func attach() {
         guard !attached else { return }
         guard let window = keyWindow() else {

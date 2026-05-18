@@ -30,6 +30,9 @@ enum ShakeObserver {
     }
 
     @MainActor
+    static var isInstalled: Bool { onShake != nil }
+
+    @MainActor
     private static func start() {
         guard motionManager.isAccelerometerAvailable else { return }
         guard !motionManager.isAccelerometerActive else { return }

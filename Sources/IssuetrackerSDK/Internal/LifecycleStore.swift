@@ -28,7 +28,7 @@ final class LifecycleStore {
     private let reasonKey = "io.issuetracker.sdk.terminatedReason"
     private let atKey = "io.issuetracker.sdk.terminatedAt"
 
-    private init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // Restore from disk so a process restart doesn't re-attempt
         // delivery against an endpoint the server has already told us

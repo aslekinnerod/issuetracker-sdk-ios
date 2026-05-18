@@ -39,16 +39,16 @@ struct OnboardingView: View {
                     TriggerTile(
                         illustration: "onboarding-shake",
                         placeholderSymbol: "iphone.gen3.radiowaves.left.and.right",
-                        title: "Shake the device",
-                        caption: "On a real iPhone, shake to open the reporter from any screen."
+                        title: "Shake your phone",
+                        caption: "Shake to open the reporter."
                     )
                 }
                 if showsLongPress {
                     TriggerTile(
                         illustration: "onboarding-longpress",
                         placeholderSymbol: "hand.tap.fill",
-                        title: "Two-finger long-press",
-                        caption: "Press anywhere with two fingers for 3 seconds. Works on simulator and device."
+                        title: "Two-finger press",
+                        caption: "Hold with two fingers for 3 seconds."
                     )
                 }
             }

@@ -22,7 +22,7 @@ enum ReportingSession {
         // code, no link back to our service. Survives app launches via
         // LifecycleStore's UserDefaults persistence.
         if LifecycleStore.shared.isTerminated {
-            presentTerminated()
+            presentTerminated(strings: runtime.terminatedUI)
             return
         }
         if ReporterIdentity.name == nil {
@@ -33,15 +33,18 @@ enum ReportingSession {
     }
 
     @MainActor
-    private static func presentTerminated() {
+    private static func presentTerminated(strings: TerminatedUiStrings?) {
         guard !presented else { return }
         presented = true
 
-        let view = TerminatedView(onClose: {
-            topViewController()?.dismiss(animated: true) {
-                presented = false
+        let view = TerminatedView(
+            strings: strings,
+            onClose: {
+                topViewController()?.dismiss(animated: true) {
+                    presented = false
+                }
             }
-        })
+        )
         let host = UIHostingController(rootView: view)
         host.modalPresentationStyle = .formSheet
         if let sheet = host.sheetPresentationController {
@@ -219,12 +222,12 @@ enum ReportingSession {
     // is the authoritative TERMINATED state rather than a stale form
     // with a generic error message.
     @MainActor
-    private static func dismissAndPresentTerminated() async {
+    private static func dismissAndPresentTerminated(strings: TerminatedUiStrings?) async {
         topViewController()?.dismiss(animated: true)
         presented = false
         pendingDraft = nil
         try? await Task.sleep(nanoseconds: 350_000_000)
-        presentTerminated()
+        presentTerminated(strings: strings)
     }
 
     @MainActor
@@ -306,8 +309,8 @@ enum ReportingSession {
                     reason: reason,
                     callback: runtime.onConfigurationError
                 )
-                Task { @MainActor in
-                    await dismissAndPresentTerminated()
+                Task { @MainActor [terminatedUI = runtime.terminatedUI] in
+                    await dismissAndPresentTerminated(strings: terminatedUI)
                 }
             }
             machine.reportError(err.localizedDescription)

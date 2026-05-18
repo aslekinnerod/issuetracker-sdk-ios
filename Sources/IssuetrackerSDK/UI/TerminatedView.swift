@@ -6,19 +6,23 @@ import SwiftUI
 /// suspended. No retry button, no raw error code, no link back to our
 /// service. ADR-0003 Decision 9.
 ///
-/// TODO (Phase C): localise these strings. Held as hardcoded English
-/// in Phase B because the rest of the SDK has no i18n infrastructure
-/// yet — localising only the terminal view would create inconsistent
-/// UX. When i18n lands across the SDK, swap `Text("...")` for the
-/// localised lookups in one pass.
+/// Strings come from ``Issuetracker/configure(apiKey:...)``'s
+/// `terminatedUI` argument; English defaults apply for any field the
+/// host doesn't override. Sister i18n hooks exist on sdk-android and
+/// sdk-web.
 struct TerminatedView: View {
+    let strings: TerminatedUiStrings?
     let onClose: () -> Void
+
+    private static let defaultTitle = "Bug reporting is no longer available."
+    private static let defaultSubtitle = "Contact your team."
+    private static let defaultCloseLabel = "Close"
 
     var body: some View {
         VStack(spacing: Tokens.Space.s5) {
             HStack {
                 Spacer()
-                Button("Close", action: onClose)
+                Button(strings?.closeLabel ?? Self.defaultCloseLabel, action: onClose)
                     .foregroundStyle(Tokens.fg2)
             }
             .padding(.horizontal, Tokens.Space.s5)
@@ -31,12 +35,12 @@ struct TerminatedView: View {
                 .foregroundStyle(Tokens.fg3)
 
             VStack(spacing: Tokens.Space.s3) {
-                Text("Bug reporting is no longer available.")
+                Text(strings?.title ?? Self.defaultTitle)
                     .font(.headline)
                     .foregroundStyle(Tokens.fg1)
                     .multilineTextAlignment(.center)
 
-                Text("Contact your team.")
+                Text(strings?.subtitle ?? Self.defaultSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(Tokens.fg2)
                     .multilineTextAlignment(.center)

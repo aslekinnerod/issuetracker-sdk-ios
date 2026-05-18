@@ -57,12 +57,14 @@ public enum Issuetracker {
         longPressToReport: Bool = true,
         enableCrashReporting: Bool = true,
         onConfigurationError: ((SdkErrorReason) -> Void)? = nil,
-        showOnboarding: Bool = false
+        showOnboarding: Bool = false,
+        terminatedUI: TerminatedUiStrings? = nil
     ) {
         let rt = Runtime(
             apiKey: apiKey,
             endpoint: Runtime.resolveEndpoint(for: apiKey),
-            onConfigurationError: onConfigurationError
+            onConfigurationError: onConfigurationError,
+            terminatedUI: terminatedUI
         )
         runtime = rt
         if shakeToReport {
@@ -173,6 +175,28 @@ public enum Issuetracker {
     }
 }
 
+/// Strings shown when the SDK has been terminated and a test-cohort
+/// user opens the reporting surface. ADR-0003 Decision 9 mandates a
+/// localised terminal message; English is the built-in default, and
+/// host apps may inject translations via ``Issuetracker/configure(apiKey:...)``.
+///
+/// Each field is optional — fields the host doesn't override fall
+/// back to English. A missing entire struct falls back to all-English.
+public struct TerminatedUiStrings: Sendable {
+    /// Big headline. Default: `"Bug reporting is no longer available."`
+    public let title: String?
+    /// One-line follow-up. Default: `"Contact your team."`
+    public let subtitle: String?
+    /// Close-button label. Default: `"Close"`.
+    public let closeLabel: String?
+
+    public init(title: String? = nil, subtitle: String? = nil, closeLabel: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+        self.closeLabel = closeLabel
+    }
+}
+
 struct Runtime {
     let apiKey: String
     let endpoint: URL
@@ -180,6 +204,7 @@ struct Runtime {
     // here (rather than in LifecycleStore) because it's a configure-
     // time setting that the user owns; the store is the state machine.
     let onConfigurationError: ((SdkErrorReason) -> Void)?
+    let terminatedUI: TerminatedUiStrings?
 
     // Routing is derived from the key prefix so integrators never see
     // any URL — they just paste the key the web UI gave them.

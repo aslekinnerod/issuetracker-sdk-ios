@@ -1,0 +1,53 @@
+# XcodeGen spec for the sample app. Run `xcodegen generate` from
+# this directory to produce IssuetrackerExample.xcodeproj (it's
+# gitignored — the spec is the source of truth).
+#
+# The app depends on the parent IssuetrackerSDK as a local Swift
+# Package via the `packages` block below, so a Cmd-R cycle on
+# IssuetrackerExample.xcodeproj picks up your latest SDK edits
+# without any explicit publish step.
+
+name: IssuetrackerExample
+
+options:
+  bundleIdPrefix: no.issuetracker
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  IssuetrackerSDK:
+    path: ../
+
+targets:
+  IssuetrackerExample:
+    type: application
+    platform: iOS
+    sources:
+      - IssuetrackerExample
+    dependencies:
+      - package: IssuetrackerSDK
+        product: IssuetrackerSDK
+    info:
+      path: IssuetrackerExample/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations: {}
+        UIRequiredDeviceCapabilities:
+          - armv7
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: no.issuetracker.example
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.9"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # MetricKit + crash reporting need a real signing identity at
+        # runtime on a device. Simulator runs without signing.
+        CODE_SIGN_STYLE: Automatic

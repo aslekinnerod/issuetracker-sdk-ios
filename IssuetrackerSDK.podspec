@@ -17,4 +17,13 @@ Pod::Spec.new do |s|
 
   s.source_files     = 'Sources/IssuetrackerSDK/**/*.swift'
   s.frameworks       = 'UIKit', 'Foundation', 'CoreMotion', 'MetricKit', 'ReplayKit'
+
+  # Asset catalog with onboarding illustrations. Declared as a
+  # resource_bundle so CocoaPods generates `IssuetrackerSDK.bundle`
+  # next to the framework binary — the Swift code looks it up via
+  # the `Bundle.sdkResources` extension (which falls back to
+  # `Bundle.module` when consumed via SPM).
+  s.resource_bundles = {
+    'IssuetrackerSDK' => ['Sources/IssuetrackerSDK/Resources/Onboarding.xcassets']
+  }
 end

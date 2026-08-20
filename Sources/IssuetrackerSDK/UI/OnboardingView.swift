@@ -19,40 +19,47 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top brand bar — same shield+title pattern as ReportView,
-            // so the popover feels like the same product.
-            BrandHeader(
-                title: "Report bugs from anywhere",
-                subtitle: visibleTriggerCount == 1
-                    ? "One quick gesture is all it takes"
-                    : "Two quick gestures, your choice"
-            )
-            .padding(.horizontal, Tokens.Space.s6)
-            .padding(.top, Tokens.Space.s7)
-            .padding(.bottom, Tokens.Space.s6)
+            // Content scrolls so large Dynamic Type sizes don't clip
+            // (1.4.4 / 1.4.10); the CTA stays pinned below.
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Top brand bar — same shield+title pattern as
+                    // ReportView, so the popover feels like the same
+                    // product.
+                    BrandHeader(
+                        title: "Report bugs from anywhere",
+                        subtitle: visibleTriggerCount == 1
+                            ? "One quick gesture is all it takes"
+                            : "Two quick gestures, your choice"
+                    )
+                    .padding(.horizontal, Tokens.Space.s6)
+                    .padding(.top, Tokens.Space.s7)
+                    .padding(.bottom, Tokens.Space.s6)
 
-            // Body — one tile per enabled trigger. The view above
-            // guarantees `visibleTriggerCount >= 1`, so we always
-            // render at least one tile here.
-            VStack(spacing: Tokens.Space.s5) {
-                if showsShake {
-                    TriggerTile(
-                        illustration: "onboarding-shake",
-                        placeholderSymbol: "iphone.gen3.radiowaves.left.and.right",
-                        title: "Shake your phone",
-                        caption: "Shake to open the reporter."
-                    )
-                }
-                if showsLongPress {
-                    TriggerTile(
-                        illustration: "onboarding-longpress",
-                        placeholderSymbol: "hand.tap.fill",
-                        title: "Two-finger press",
-                        caption: "Hold with two fingers for 3 seconds."
-                    )
+                    // Body — one tile per enabled trigger. The view above
+                    // guarantees `visibleTriggerCount >= 1`, so we always
+                    // render at least one tile here.
+                    VStack(spacing: Tokens.Space.s5) {
+                        if showsShake {
+                            TriggerTile(
+                                illustration: "onboarding-shake",
+                                placeholderSymbol: "iphone.gen3.radiowaves.left.and.right",
+                                title: "Shake your phone",
+                                caption: "Shake to open the reporter."
+                            )
+                        }
+                        if showsLongPress {
+                            TriggerTile(
+                                illustration: "onboarding-longpress",
+                                placeholderSymbol: "hand.tap.fill",
+                                title: "Two-finger press",
+                                caption: "Hold with two fingers for 3 seconds."
+                            )
+                        }
+                    }
+                    .padding(.horizontal, Tokens.Space.s6)
                 }
             }
-            .padding(.horizontal, Tokens.Space.s6)
 
             Spacer(minLength: Tokens.Space.s7)
 
@@ -86,10 +93,10 @@ private struct TriggerTile: View {
 
             VStack(alignment: .leading, spacing: Tokens.Space.s2) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .brandFont(15, .semibold, relativeTo: .body)
                     .foregroundStyle(Tokens.fg1)
                 Text(caption)
-                    .font(.system(size: 13))
+                    .brandFont(13, relativeTo: .footnote)
                     .foregroundStyle(Tokens.fg2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -110,15 +117,18 @@ private struct TriggerTile: View {
         // if the asset hasn't been added to Resources/Onboarding.xcassets
         // (e.g. during initial SDK development).
         if UIImage(named: illustration, in: .sdkResources, with: nil) != nil {
-            Image(illustration, bundle: .sdkResources)
+            // Decorative init — otherwise VoiceOver reads the raw
+            // asset name ("onboarding-shake").
+            Image(decorative: illustration, bundle: .sdkResources)
                 .resizable()
                 .renderingMode(.original)
                 .aspectRatio(contentMode: .fit)
                 .padding(Tokens.Space.s4)
         } else {
             Image(systemName: placeholderSymbol)
-                .font(.system(size: 36, weight: .regular))
+                .brandFont(36, .regular, relativeTo: .largeTitle)
                 .foregroundStyle(Tokens.accent)
+                .accessibilityHidden(true)
         }
     }
 }

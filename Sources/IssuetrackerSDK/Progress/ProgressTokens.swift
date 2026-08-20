@@ -6,7 +6,8 @@ enum ProgressTokens {
         static let paper = Color.white
         static let track = Color(hex: 0xF1EEE8)
         static let muted = Color(hex: 0x6E6A62)
-        static let subtle = Color(hex: 0x9A958A)
+        // 3.44:1 vs paper (WCAG 1.4.11) — stalled/upcoming phase dots.
+        static let subtle = Color(hex: 0x8F8A80)
         static let line = Color(.sRGB, red: 11.0/255, green: 11.0/255, blue: 15.0/255, opacity: 0.05)
         static let statusBody = Color(hex: 0x3A3A3A)
     }
@@ -35,6 +36,10 @@ enum ProgressTokens {
         static let dark = Color(hex: 0x7D5614)
         static let soft = Color(hex: 0xFBEFD8)
         static let fillStart = Color(hex: 0xF4D38A)
+        // WCAG 1.4.11 (non-text contrast ≥3:1) — meaningful graphics:
+        // icon glyph, indeterminate sweep highlight, fill head cap.
+        // accent/fillStart stay decorative (gradient body only).
+        static let graphic = Color(hex: 0xB87A17)
     }
 
     enum Card {
@@ -52,6 +57,9 @@ enum ProgressTokens {
     enum Track {
         static let height: CGFloat = 10
         static let heightCompact: CGFloat = 6
+        // WCAG 1.4.11 — minimum width of the fill head cap rendered in
+        // the variant's graphic colour (spec: size.track.headCapMinWidth).
+        static let headCapMinWidth: CGFloat = 3
     }
 
     enum Badge {

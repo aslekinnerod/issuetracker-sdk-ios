@@ -53,6 +53,21 @@ enum ProgressVariant {
         }
     }
 
+    // WCAG 1.4.11 — a variant whose accent falls below 3:1 against the
+    // track defines a dedicated graphic colour, used for the icon glyph,
+    // the indeterminate sweep highlight, and the determinate fill head
+    // cap. Variants whose accent already meets 3:1 (bug, task) return
+    // nil and render no head cap.
+    var graphic: Color? {
+        switch self {
+        case .bug, .task: return nil
+        case .story: return ProgressTokens.StoryColor.graphic
+        }
+    }
+
+    /// Colour for meaningful graphics: `graphic` where defined, else `accent`.
+    var graphicOrAccent: Color { graphic ?? accent }
+
     var fillGradient: [Color] {
         switch self {
         case .bug: return [ProgressTokens.BugColor.dark, ProgressTokens.BugColor.accent]

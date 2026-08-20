@@ -3,7 +3,22 @@ import SwiftUI
 struct IndeterminateSweep: View {
     let color: Color
 
+    // Reduce Motion (2.3.3): replace the continuous sweep with a
+    // static tinted track.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
+        if reduceMotion {
+            Rectangle()
+                .fill(color.opacity(0.35))
+                .background(color.opacity(0.13))
+                .clipShape(Capsule())
+        } else {
+            animatedSweep
+        }
+    }
+
+    private var animatedSweep: some View {
         GeometryReader { proxy in
             TimelineView(.animation) { context in
                 let cycle = ProgressTokens.Motion.sweepDurationMs / 1000.0
@@ -47,13 +62,25 @@ struct ProgressFill: View {
                             startPoint: .leading,
                             endPoint: .trailing
                         ))
+                        .overlay(alignment: .trailing) {
+                            // WCAG 1.4.11 head cap: the fill's leading edge
+                            // renders in the variant's graphic colour so the
+                            // progress boundary against the track meets 3:1.
+                            // Clipped to the capsule's rounded corner below.
+                            if let capColor = headCapColor {
+                                Rectangle()
+                                    .fill(capColor)
+                                    .frame(width: ProgressTokens.Track.headCapMinWidth)
+                            }
+                        }
+                        .clipShape(Capsule())
                         .frame(width: max(0, proxy.size.width * presentation.fillWidthPercent / 100.0))
                         .animation(
                             .linear(duration: ProgressTokens.Motion.fillDurationMs / 1000.0),
                             value: presentation.fillWidthPercent
                         )
                 } else {
-                    IndeterminateSweep(color: variant.accent)
+                    IndeterminateSweep(color: variant.graphicOrAccent)
                 }
             }
         }
@@ -64,6 +91,13 @@ struct ProgressFill: View {
             return [ProgressTokens.ErrorColor.dark, ProgressTokens.ErrorColor.accent]
         }
         return variant.fillGradient
+    }
+
+    // Only variants that define a graphic colour draw a head cap; the
+    // error fill already meets 3:1 against the track, so no cap there.
+    private var headCapColor: Color? {
+        if presentation.tintIsError { return nil }
+        return variant.graphic
     }
 }
 
@@ -92,7 +126,21 @@ struct PhaseDot: View {
 private struct PulsingDot: View {
     let color: Color
 
+    // Reduce Motion (2.3.3): render a static dot.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
+        if reduceMotion {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+                .frame(width: 12, height: 12)
+        } else {
+            pulsing
+        }
+    }
+
+    private var pulsing: some View {
         TimelineView(.animation) { context in
             let cycle = ProgressTokens.Motion.phaseDotPulseDurationMs / 1000.0
             let t = context.date.timeIntervalSinceReferenceDate

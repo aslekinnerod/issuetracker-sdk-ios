@@ -3,9 +3,8 @@ import UIKit
 // Red floating pill that's visible over the host app while a
 // screen recording is active. Lives in its own UIWindow so sheets,
 // presented view controllers and rotation changes don't bury it.
-//
-// Hit-testing is scoped to just the pill itself — touches elsewhere
-// fall through to the app as usual.
+// Window plumbing (PassThroughWindow, MinTouchTargetButton) is shared
+// with FloatingReportButton — see PassThroughWindow.swift.
 @MainActor
 final class FloatingStopPill {
     static let shared = FloatingStopPill()
@@ -26,7 +25,7 @@ final class FloatingStopPill {
         root.view.backgroundColor = .clear
         w.rootViewController = root
 
-        let pill = UIButton(type: .system)
+        let pill = MinTouchTargetButton(type: .system)
         pill.translatesAutoresizingMaskIntoConstraints = false
         // Trace `--status-critical` (#E03A4E). Slightly more brand-on
         // than systemRed without losing the "stop now" affordance.
@@ -38,7 +37,12 @@ final class FloatingStopPill {
         )
         pill.tintColor = .white
         pill.setTitle("  Stop", for: .normal)
-        pill.titleLabel?.font = .systemFont(ofSize: 12, weight: .semibold)
+        // Scale with Dynamic Type (1.4.4) — anchored to caption1 to
+        // match the 12pt base size.
+        pill.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1)
+            .scaledFont(for: .systemFont(ofSize: 12, weight: .semibold))
+        pill.titleLabel?.adjustsFontForContentSizeCategory = true
+        pill.accessibilityLabel = "Stop recording"
         pill.contentEdgeInsets = UIEdgeInsets(top: 6, left: 10, bottom: 6, right: 12)
         pill.layer.cornerRadius = 14
         // Soft cyan halo, mirrors `--shadow-glow` on web — keeps the
@@ -76,12 +80,17 @@ final class FloatingStopPill {
         w.hitTestView = pill
         w.isHidden = false
         window = w
+        // The report button (ADR-0008) yields while the pill is up —
+        // one floater at a time, and the pill's stop action is the
+        // only thing that should be tappable during a recording.
+        FloatingReportButton.shared.setStopPillVisible(true)
     }
 
     func hide() {
         window?.isHidden = true
         window = nil
         tapHandler = nil
+        FloatingReportButton.shared.setStopPillVisible(false)
     }
 
     @objc private func handleTap() {
@@ -89,18 +98,3 @@ final class FloatingStopPill {
     }
 }
 
-// UIWindow subclass that only intercepts touches that land on its
-// single hit-testable subview. Everything else falls through to the
-// underlying window (the host app).
-private final class PassThroughWindow: UIWindow {
-    weak var hitTestView: UIView?
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let hitTestView else { return nil }
-        let pointInView = convert(point, to: hitTestView)
-        if hitTestView.point(inside: pointInView, with: event) {
-            return super.hitTest(point, with: event)
-        }
-        return nil
-    }
-}

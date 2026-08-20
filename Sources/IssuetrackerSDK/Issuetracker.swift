@@ -24,6 +24,27 @@ public enum Issuetracker {
     ///     long-press for 3 seconds anywhere in the app brings up the
     ///     reporter. Same gesture as the web SDK uses on touch
     ///     devices, so users only learn one trigger across platforms.
+    ///   - accessibilityAction: If `true`, and whenever VoiceOver is
+    ///     running, the SDK registers a "Report a bug" accessibility
+    ///     custom action on the key window's root view controller —
+    ///     the screen-reader activation path for the reporter, since
+    ///     VoiceOver claims multi-finger gestures and shake is not an
+    ///     option for every user (WCAG 2.5.1/2.5.4, ADR-0008
+    ///     Decision 2). The action is appended to (never replaces)
+    ///     any custom actions the host app has set, follows key-window
+    ///     changes, and is removed the moment VoiceOver stops or the
+    ///     flag is re-configured off. Defaults to `false` so existing
+    ///     integrators are unaffected.
+    ///   - showReportButton: If `true`, shows a small SDK-provided
+    ///     floating "Report" button (bottom-trailing, safe-area
+    ///     aware) that opens the reporter — the no-code path to a
+    ///     visible, single-pointer alternative to the gesture
+    ///     triggers (ADR-0008 Decision 3). The button hides while the
+    ///     reporter sheet or the recording stop pill is up, and is
+    ///     removed for good when the SDK reaches the TERMINATED state
+    ///     or the flag is re-configured off. Defaults to `false`;
+    ///     hosts that prefer their own control should wire it to
+    ///     ``Issuetracker/report()`` instead.
     ///   - enableCrashReporting: If `true` (default), the SDK detects
     ///     unexpectedly-ended sessions (crash, OOM kill, watchdog) and
     ///     opens an issue for them automatically. The decision is
@@ -55,6 +76,8 @@ public enum Issuetracker {
         apiKey: String,
         shakeToReport: Bool = true,
         longPressToReport: Bool = true,
+        accessibilityAction: Bool = false,
+        showReportButton: Bool = false,
         enableCrashReporting: Bool = true,
         onConfigurationError: ((SdkErrorReason) -> Void)? = nil,
         showOnboarding: Bool = false,
@@ -67,17 +90,50 @@ public enum Issuetracker {
             terminatedUI: terminatedUI
         )
         runtime = rt
+        // Seed remote config (testers-only gating, ADR-0005) from the
+        // UserDefaults cache before the observers install, so the very
+        // first gesture consults real data when we have any. The
+        // network refresh runs async below.
+        AttestationStore.shared.install(runtime: rt)
+        // Gesture triggers are gated per-fire rather than at install
+        // time: config can flip while the app runs, and a fire-time
+        // check reconciles instantly with no uninstall plumbing. In
+        // testers-only mode without a token the gestures are silently
+        // inert (ADR-0005 invariant 5). The programmatic report() is
+        // deliberately ungated — a host app's own button should
+        // surface the attestation message instead.
         if shakeToReport {
-            ShakeObserver.install { Self.report() }
+            ShakeObserver.install {
+                guard AttestationStore.shared.canTriggerReport else { return }
+                Self.report()
+            }
         }
         if longPressToReport {
-            LongPressObserver.install { Self.report() }
+            LongPressObserver.install {
+                guard AttestationStore.shared.canTriggerReport else { return }
+                Self.report()
+            }
         }
-        if showOnboarding {
-            OnboardingPresenter.presentIfNeeded(
-                shakeEnabled: shakeToReport,
-                longPressEnabled: longPressToReport
-            )
+        // ADR-0008 accessible activation paths. Applied unconditionally
+        // (unlike the fire-time-gated gestures) so a re-configure flips
+        // them live in both directions — `false` tears down whatever an
+        // earlier configure installed. Both funnel into the same
+        // `report()` path as the host-app button the README asks for.
+        AccessibilityActionObserver.setEnabled(accessibilityAction)
+        FloatingReportButton.shared.setEnabled(showReportButton)
+        Task { @MainActor in
+            await AttestationStore.shared.refreshRemoteConfig(runtime: rt)
+            // Onboarding waits for the config refresh so we never
+            // advertise gestures that are gated off for this install —
+            // and never wrongly suppress it on a prod key's first
+            // launch just because the fail-closed default was still in
+            // effect.
+            if showOnboarding, AttestationStore.shared.canTriggerReport {
+                OnboardingPresenter.presentIfNeeded(
+                    shakeEnabled: shakeToReport,
+                    longPressEnabled: longPressToReport
+                )
+            }
         }
         if enableCrashReporting {
             // Must run BEFORE anything else starts touching the
@@ -98,7 +154,7 @@ public enum Issuetracker {
     /// introduction again"-style entry in the host app's own settings
     /// screen. Calling this with both gestures disabled is a no-op —
     /// there is nothing to teach. Must be called after
-    /// ``configure(apiKey:shakeToReport:longPressToReport:enableCrashReporting:onConfigurationError:showOnboarding:)``.
+    /// ``configure(apiKey:shakeToReport:longPressToReport:accessibilityAction:showReportButton:enableCrashReporting:onConfigurationError:showOnboarding:terminatedUI:)``.
     @MainActor
     public static func showOnboarding() {
         guard let runtime else {
@@ -142,6 +198,24 @@ public enum Issuetracker {
     /// can still group reports from this install.
     public static func clearIdentity() {
         ReporterIdentity.clearName()
+    }
+
+    /// Stores a tester attestation token (ADR-0005). On projects in
+    /// testers-only mode this is what unlocks the report triggers and
+    /// gets reports past the server; in open mode it stamps reports
+    /// with the tester's identity. The token normally arrives via the
+    /// companion-app enrollment handshake; this API is the manual
+    /// injection point until that ships (and for integration tests).
+    @MainActor
+    public static func setTesterToken(_ token: String, expiresAt: Date? = nil) {
+        AttestationStore.shared.setTesterToken(token, expiresAt: expiresAt)
+    }
+
+    /// Removes the stored tester token. On testers-only projects the
+    /// gesture triggers go inert again from the next gesture.
+    @MainActor
+    public static func clearTesterToken() {
+        AttestationStore.shared.clearTesterToken()
     }
 
     /// Records a single user action. The SDK keeps the most recent 5

@@ -55,6 +55,8 @@ struct CropOverlay: View {
             handle(at: CGPoint(x: rect.maxX, y: rect.maxY), corner: .bottomRight)
         }
         .frame(width: imageSize.width, height: imageSize.height)
+        .accessibilityLabel("Crop area")
+        .accessibilityHint("Drag the corner handles to crop. Cropping the screenshot is optional.")
     }
 
     private enum Corner { case topLeft, topRight, bottomLeft, bottomRight }
@@ -65,6 +67,8 @@ struct CropOverlay: View {
             .fill(Color.white)
             .frame(width: 20, height: 20)
             .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 1))
+            // 44×44pt touch target (2.5.8) around the 20pt visual handle.
+            .contentShape(Circle().inset(by: -12))
             .position(x: point.x, y: point.y)
             .gesture(cornerGesture(corner: corner))
     }

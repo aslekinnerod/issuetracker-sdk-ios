@@ -9,8 +9,9 @@ import XCTest
 final class SdkErrorReasonTests: XCTestCase {
 
     func testCanonicalReasonsAreAllRepresented() {
-        // Mirror of the canonical seven from the shared schema. The
-        // five SDKs share this contract; drift breaks deployed clients.
+        // Mirror of the canonical set from the shared schema (ADR-0003
+        // Decision 9 + the ADR-0005 tester-gating reasons). The five
+        // SDKs share this contract; drift breaks deployed clients.
         let canonical: Set<String> = [
             "project_deleted",
             "project_not_found",
@@ -19,6 +20,8 @@ final class SdkErrorReasonTests: XCTestCase {
             "invalid_api_key",
             "quota_exceeded",
             "transient",
+            "tester_attestation_required",
+            "tester_token_invalid",
         ]
         let actual = Set(SdkErrorReason.allCases.map(\.rawValue))
         XCTAssertEqual(actual, canonical)
@@ -41,6 +44,22 @@ final class SdkErrorReasonTests: XCTestCase {
         XCTAssertFalse(SdkErrorReason.apiKeyRevoked.isRecoverable)
         XCTAssertFalse(SdkErrorReason.workspaceSuspended.isRecoverable)
         XCTAssertFalse(SdkErrorReason.invalidApiKey.isRecoverable)
+        XCTAssertFalse(SdkErrorReason.testerAttestationRequired.isRecoverable)
+        XCTAssertFalse(SdkErrorReason.testerTokenInvalid.isRecoverable)
+    }
+
+    func testTesterGatingReasonsAreNonTerminal() {
+        // ADR-0005: non-recoverable but NOT terminal — the SDK must
+        // never transition to TERMINATED on a tester-gating rejection.
+        XCTAssertFalse(SdkErrorReason.testerAttestationRequired.isTerminal)
+        XCTAssertFalse(SdkErrorReason.testerTokenInvalid.isTerminal)
+        XCTAssertFalse(SdkErrorReason.quotaExceeded.isTerminal)
+        XCTAssertFalse(SdkErrorReason.transient.isTerminal)
+        XCTAssertTrue(SdkErrorReason.projectDeleted.isTerminal)
+        XCTAssertTrue(SdkErrorReason.projectNotFound.isTerminal)
+        XCTAssertTrue(SdkErrorReason.apiKeyRevoked.isTerminal)
+        XCTAssertTrue(SdkErrorReason.workspaceSuspended.isTerminal)
+        XCTAssertTrue(SdkErrorReason.invalidApiKey.isTerminal)
     }
 
     func testParseWellFormedWorkspaceSuspended() {

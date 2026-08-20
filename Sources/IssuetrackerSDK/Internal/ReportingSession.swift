@@ -7,7 +7,22 @@ import UIKit
 // dropped.
 enum ReportingSession {
     @MainActor
-    private static var presented = false
+    private static var presented = false {
+        didSet {
+            // Keeps the ADR-0008 floating report button from sitting
+            // on top of (or under) the reporter / name-prompt /
+            // terminated sheets — it hides while any of them is up
+            // and returns on dismiss.
+            FloatingReportButton.shared.setReporterPresented(presented)
+        }
+    }
+
+    /// Whether any SDK sheet (reporter, name prompt, terminated view)
+    /// is currently presented. Reentry guard for the ADR-0008
+    /// activation paths (accessibility custom action, floating
+    /// report button).
+    @MainActor
+    static var isPresented: Bool { presented }
     // Preserves in-progress draft data when we dismiss the sheet to
     // start a recording and re-present it afterwards.
     @MainActor
@@ -253,6 +268,13 @@ enum ReportingSession {
             if !description.isEmpty {
                 payload["description"] = description
             }
+            // Attach attestation whenever we hold a token — in open
+            // mode it still stamps the report with the tester's
+            // identity (ADR-0005 Decision 5); in testers-only mode
+            // it's what gets us past ingest.
+            if let testerToken = AttestationStore.shared.testerToken {
+                payload["testerToken"] = testerToken
+            }
             if let screenshot,
                let data = screenshot.jpegData(compressionQuality: 0.85) {
                 payload["screenshot"] = [
@@ -299,12 +321,28 @@ enum ReportingSession {
             machine.reportDone(issueId: result.issueId)
             return .success(())
         } catch let err as APIClient.CallableError {
-            // ADR-0003 Decision 9: non-recoverable failures flip the
-            // SDK into one-way TERMINATED. Replace the in-progress
+            // Tester-gating rejections (ADR-0005) are non-recoverable
+            // but NOT terminal — the project is alive, this install
+            // just lacks valid attestation. Show a human message,
+            // drop any stale token, and re-pull config so the gesture
+            // triggers go inert instead of leading users back into
+            // this dead end.
+            if let reason = err.sdkErrorReason, reason.isTesterGating {
+                if reason == .testerTokenInvalid {
+                    AttestationStore.shared.clearTesterToken()
+                }
+                Task { @MainActor in
+                    await AttestationStore.shared.refreshRemoteConfig(runtime: runtime)
+                }
+                machine.reportError("Reporting on this project is limited to enrolled testers.")
+                return .failure(err)
+            }
+            // ADR-0003 Decision 9: terminal failures flip the SDK
+            // into one-way TERMINATED. Replace the in-progress
             // submit sheet with TerminatedView so the user lands on
             // the authoritative end-state immediately — no need to
             // dismiss and re-trigger to discover bug reporting is gone.
-            if let reason = err.sdkErrorReason, !reason.isRecoverable {
+            if let reason = err.sdkErrorReason, reason.isTerminal {
                 LifecycleStore.shared.transitionToTerminated(
                     reason: reason,
                     callback: runtime.onConfigurationError

@@ -17,6 +17,8 @@ public enum SdkErrorReason: String, Sendable, CaseIterable {
     case invalidApiKey = "invalid_api_key"
     case quotaExceeded = "quota_exceeded"
     case transient
+    case testerAttestationRequired = "tester_attestation_required"
+    case testerTokenInvalid = "tester_token_invalid"
 
     public var isRecoverable: Bool {
         switch self {
@@ -26,9 +28,36 @@ public enum SdkErrorReason: String, Sendable, CaseIterable {
              .projectNotFound,
              .apiKeyRevoked,
              .workspaceSuspended,
-             .invalidApiKey:
+             .invalidApiKey,
+             .testerAttestationRequired,
+             .testerTokenInvalid:
             return false
         }
+    }
+
+    /// Whether this reason must flip the SDK into one-way TERMINATED.
+    /// Tester-gating rejections (ADR-0005) are non-recoverable —
+    /// retrying the same request cannot succeed — but NOT terminal:
+    /// the project is alive and the key is valid; only this install
+    /// lacks (valid) attestation.
+    public var isTerminal: Bool {
+        switch self {
+        case .quotaExceeded,
+             .transient,
+             .testerAttestationRequired,
+             .testerTokenInvalid:
+            return false
+        case .projectDeleted,
+             .projectNotFound,
+             .apiKeyRevoked,
+             .workspaceSuspended,
+             .invalidApiKey:
+            return true
+        }
+    }
+
+    var isTesterGating: Bool {
+        self == .testerAttestationRequired || self == .testerTokenInvalid
     }
 }
 

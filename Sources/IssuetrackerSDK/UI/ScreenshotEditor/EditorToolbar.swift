@@ -27,27 +27,41 @@ struct EditorToolbar: View {
                 if mode == .crop {
                     Button(action: onResetCrop) {
                         Image(systemName: "arrow.counterclockwise")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityLabel("Reset crop")
                 } else {
                     Button(action: onUndo) {
                         Image(systemName: "arrow.uturn.backward")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityLabel("Undo")
                 }
             }
             .font(.title3)
             .padding(.horizontal, 4)
 
             if mode == .pen || mode == .highlighter {
-                HStack(spacing: 10) {
+                HStack(spacing: 4) {
                     ForEach(editorColorPalette, id: \.self) { c in
-                        Circle()
-                            .fill(c)
-                            .frame(width: 24, height: 24)
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.primary, lineWidth: color == c ? 2 : 0)
-                            )
-                            .onTapGesture { color = c }
+                        Button {
+                            color = c
+                        } label: {
+                            Circle()
+                                .fill(c)
+                                .frame(width: 24, height: 24)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.primary, lineWidth: color == c ? 2 : 0)
+                                )
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(colorName(c))
+                        .accessibilityAddTraits(color == c ? .isSelected : [])
                     }
                     Spacer()
                 }
@@ -68,7 +82,20 @@ struct EditorToolbar: View {
                 Text(label).font(.caption2)
             }
             .foregroundStyle(mode == m ? Color.accentColor : Color.primary)
-            .frame(width: 54)
+            .frame(width: 54, height: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityAddTraits(mode == m ? .isSelected : [])
+    }
+
+    private func colorName(_ c: Color) -> String {
+        switch c {
+        case .red: return "Red"
+        case .orange: return "Orange"
+        case .yellow: return "Yellow"
+        case .green: return "Green"
+        case .blue: return "Blue"
+        default: return "Color"
         }
     }
 }

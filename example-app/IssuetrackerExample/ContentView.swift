@@ -14,6 +14,7 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     LifecycleSection()
                     ReportingSection()
+                    AccessibilitySection()
                     IdentitySection()
                     BreadcrumbSection()
                     OnboardingSection()
@@ -101,6 +102,35 @@ private struct ReportingSection: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+// MARK: - Accessibility (ADR-0008)
+
+private struct AccessibilitySection: View {
+    @State private var a11yAction: Bool = UserDefaults.standard.bool(forKey: PREF_A11Y_ACTION)
+    @State private var showButton: Bool = UserDefaults.standard.bool(forKey: PREF_SHOW_REPORT_BUTTON)
+
+    var body: some View {
+        SectionCard(
+            title: "Accessibility",
+            subtitle: "Opt-in activation paths (ADR-0008). Both apply immediately via live re-configure. The custom action only registers while VoiceOver is running."
+        ) {
+            Toggle(isOn: $a11yAction) {
+                Text("VoiceOver custom action")
+            }
+            .onChange(of: a11yAction) { newValue in
+                UserDefaults.standard.set(newValue, forKey: PREF_A11Y_ACTION)
+                configureSdk()
+            }
+            Toggle(isOn: $showButton) {
+                Text("Floating report button")
+            }
+            .onChange(of: showButton) { newValue in
+                UserDefaults.standard.set(newValue, forKey: PREF_SHOW_REPORT_BUTTON)
+                configureSdk()
+            }
         }
     }
 }

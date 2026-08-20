@@ -33,6 +33,53 @@ struct MyApp: App {
 }
 ```
 
+## Accessibility
+
+The shake and two-finger long-press triggers are motion- and
+multipoint-gestures. Not every user can perform them: WCAG 2.2
+requires a single-pointer alternative for multipoint gestures
+(2.5.1) and a non-motion alternative for motion actuation (2.5.4),
+and gestures like these can also collide with VoiceOver and Switch
+Control input.
+
+If you enable shake and/or long-press, you **must** also provide an
+accessible activation path. Either let the SDK do it (ADR-0008):
+
+```swift
+Issuetracker.configure(
+  apiKey: "it_...",
+  // Registers a "Report a bug" VoiceOver custom action whenever
+  // VoiceOver is running — screen readers claim multi-finger
+  // gestures, so this is the screen-reader path to the reporter.
+  accessibilityAction: true,
+  // Shows a small floating "Report" button (bottom-trailing) —
+  // a visible, single-pointer, non-motion alternative for everyone
+  // else. Hidden while the reporter is open.
+  showReportButton: true
+)
+```
+
+**or** expose a visible control in your own UI that calls
+`Issuetracker.report()` — for example a "Report a bug" row in your
+settings or help menu:
+
+```swift
+Button("Report a bug") {
+  Issuetracker.report()
+}
+```
+
+Both flags default to `false` and can be flipped at runtime by
+calling `configure(...)` again.
+
+You should also offer a user-facing setting to disable the gesture
+triggers, both for accessibility reasons and because shake/two-finger
+press can conflict with assistive technologies or your app's own
+gestures.
+
+The SDK's own UI supports Dynamic Type, VoiceOver labels and
+announcements, and Reduce Motion.
+
 ## Full documentation
 
 API reference, triggers, TERMINATED behavior, crash reporting, identity

@@ -4,11 +4,16 @@ struct BugGlyph: View {
     let color: Color
     let wobble: Bool
 
+    // Respect Reduce Motion (2.3.3): keep the bug static.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var animates: Bool { wobble && !reduceMotion }
+
     var body: some View {
-        TimelineView(.animation(paused: !wobble)) { context in
+        TimelineView(.animation(paused: !animates)) { context in
             let t = context.date.timeIntervalSinceReferenceDate * 1000.0
-            let angle = wobble ? sin(t / 120.0) * ProgressTokens.Motion.iconWobbleAmplitudeDeg : 0
-            let leg = wobble ? sin(t / 90.0) * 1.5 : 0
+            let angle = animates ? sin(t / 120.0) * ProgressTokens.Motion.iconWobbleAmplitudeDeg : 0
+            let leg = animates ? sin(t / 90.0) * 1.5 : 0
             BugShape(legWiggle: leg)
                 .stroke(color, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
                 .background(BugBody(color: color))

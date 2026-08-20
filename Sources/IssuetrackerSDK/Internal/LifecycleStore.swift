@@ -16,6 +16,12 @@ import Foundation
 final class LifecycleStore {
     static let shared = LifecycleStore()
 
+    /// Posted (main queue) on the one-way OK → TERMINATED transition.
+    /// Lets UI surfaces owned by the SDK (the ADR-0008 floating report
+    /// button) tear themselves down without this Foundation-only state
+    /// machine importing UIKit.
+    static let terminatedNotification = Notification.Name("io.issuetracker.sdk.terminated")
+
     enum State: Sendable {
         case ok
         case suspended
@@ -63,6 +69,7 @@ final class LifecycleStore {
         state = .terminated(reason: reason, at: now)
         defaults.set(reason.rawValue, forKey: reasonKey)
         defaults.set(now.timeIntervalSince1970, forKey: atKey)
+        NotificationCenter.default.post(name: Self.terminatedNotification, object: nil)
         callback?(reason)
     }
 }

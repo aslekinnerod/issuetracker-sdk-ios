@@ -23,9 +23,15 @@ final class MetricKitSubscriber: NSObject, MXMetricManagerSubscriber {
     static let shared = MetricKitSubscriber()
 
     private var runtime: Runtime?
+    private var subscribed = false
 
     func start(runtime: Runtime) {
         self.runtime = runtime
+        // Re-configure (live flag changes, ADR-0008) must not add us
+        // to MXMetricManager twice — payloads would double-deliver.
+        // The runtime swap above is the only thing that repeats.
+        guard !subscribed else { return }
+        subscribed = true
         MXMetricManager.shared.add(self)
     }
 

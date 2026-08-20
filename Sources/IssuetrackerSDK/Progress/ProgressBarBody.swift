@@ -42,11 +42,11 @@ struct ProgressBarBody: View {
             iconFrame
             VStack(alignment: .leading, spacing: 2) {
                 Text(variant.kindText)
-                    .font(.system(size: ProgressTokens.TypeSize.kind, weight: ProgressTokens.TypeWeight.kind, design: .monospaced))
+                    .brandFont(ProgressTokens.TypeSize.kind, ProgressTokens.TypeWeight.kind, relativeTo: .caption2, design: .monospaced)
                     .tracking(ProgressTokens.TypeSize.kind * 0.12)
                     .foregroundStyle(presentation.tintIsError ? ProgressTokens.ErrorColor.accent : variant.accentDark)
                 Text(title)
-                    .font(.system(size: ProgressTokens.TypeSize.title, weight: ProgressTokens.TypeWeight.title))
+                    .brandFont(ProgressTokens.TypeSize.title, ProgressTokens.TypeWeight.title, relativeTo: .body)
                     .foregroundStyle(ProgressTokens.NeutralColor.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -68,7 +68,9 @@ struct ProgressBarBody: View {
 
     @ViewBuilder
     private var glyph: some View {
-        let color: Color = presentation.tintIsError ? ProgressTokens.ErrorColor.accent : variant.accent
+        // WCAG 1.4.11: the glyph is a meaningful graphic — use the
+        // variant's graphic colour where defined (story), else accent.
+        let color: Color = presentation.tintIsError ? ProgressTokens.ErrorColor.accent : variant.graphicOrAccent
         switch variant {
         case .bug:
             BugGlyph(color: color, wobble: presentation.iconWobbles)
@@ -81,7 +83,7 @@ struct ProgressBarBody: View {
 
     private var badge: some View {
         Text(presentation.badgeText)
-            .font(.system(size: ProgressTokens.TypeSize.badge, weight: ProgressTokens.TypeWeight.badge, design: .monospaced))
+            .brandFont(ProgressTokens.TypeSize.badge, ProgressTokens.TypeWeight.badge, relativeTo: .caption, design: .monospaced)
             .tracking(ProgressTokens.TypeSize.badge * 0.04)
             .monospacedDigit()
             .foregroundStyle(presentation.tintIsError ? ProgressTokens.ErrorColor.accent : variant.accentDark)
@@ -99,7 +101,7 @@ struct ProgressBarBody: View {
             PhaseDot(phase: state.phase, accent: variant.accent)
                 .frame(width: 14, alignment: .center)
             Text(presentation.statusText)
-                .font(.system(size: ProgressTokens.TypeSize.status, weight: ProgressTokens.TypeWeight.status))
+                .brandFont(ProgressTokens.TypeSize.status, ProgressTokens.TypeWeight.status, relativeTo: .footnote)
                 .foregroundStyle(statusColor)
                 .lineLimit(1)
                 .truncationMode(.tail)

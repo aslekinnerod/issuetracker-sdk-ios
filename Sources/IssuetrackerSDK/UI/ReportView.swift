@@ -76,7 +76,7 @@ struct ReportView: View {
                         videoSection
                         if let error {
                             Text(error)
-                                .font(.system(size: 12))
+                                .brandFont(12, relativeTo: .caption)
                                 .foregroundStyle(Tokens.critical)
                         }
                     }
@@ -117,10 +117,12 @@ struct ReportView: View {
                 onClose()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .medium))
+                    .brandFont(14, .medium, relativeTo: .subheadline)
                     .foregroundStyle(Tokens.fg3)
                     .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel("Close")
             .disabled(isSubmitting)
         }
         .padding(.horizontal, Tokens.Space.s5)
@@ -130,14 +132,14 @@ struct ReportView: View {
     private var reportingAsRow: some View {
         HStack(spacing: 8) {
             Text("Reporting as \(reporterName)")
-                .font(.system(size: 12))
+                .brandFont(12, relativeTo: .caption)
                 .foregroundStyle(Tokens.fg3)
             Spacer()
             Button("Not you?") {
                 onChangeName(currentDraft())
             }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Tokens.accent)
+            .brandFont(12, .medium, relativeTo: .caption)
+            .foregroundStyle(Tokens.accentStrong)
             .disabled(isSubmitting)
         }
     }
@@ -147,6 +149,7 @@ struct ReportView: View {
             FieldLabel(title: "Title")
             BrandTextField(
                 value: $title,
+                label: "Title",
                 placeholder: "Short summary, e.g. checkout button does nothing"
             )
         }
@@ -174,6 +177,7 @@ struct ReportView: View {
             FieldLabel(title: "What happened?")
             BrandTextField(
                 value: $description,
+                label: "What happened?",
                 placeholder: "What did you expect, and what happened instead?",
                 multiline: true
             )
@@ -185,7 +189,7 @@ struct ReportView: View {
             HStack {
                 FieldLabel(title: "Screenshot")
                 Spacer()
-                Toggle("", isOn: $includeScreenshot)
+                Toggle("Include screenshot", isOn: $includeScreenshot)
                     .labelsHidden()
                     .tint(Tokens.accent)
             }
@@ -206,9 +210,9 @@ struct ReportView: View {
                             )
                         HStack(spacing: 4) {
                             Image(systemName: "pencil.tip")
-                                .font(.system(size: 11, weight: .medium))
+                                .brandFont(11, .medium, relativeTo: .caption)
                             Text("Edit")
-                                .font(.system(size: 11, weight: .medium))
+                                .brandFont(11, .medium, relativeTo: .caption)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -223,6 +227,8 @@ struct ReportView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Screenshot preview")
+                .accessibilityHint("Double tap to annotate. Annotation is optional.")
             }
         }
     }
@@ -245,22 +251,23 @@ struct ReportView: View {
             HStack(spacing: 10) {
                 Image(systemName: "video.fill")
                     .foregroundStyle(Tokens.accent)
-                    .font(.system(size: 14, weight: .medium))
+                    .brandFont(14, .medium, relativeTo: .subheadline)
                 Text(videoSummary(url: url))
-                    .font(.system(size: 13))
+                    .brandFont(13, relativeTo: .footnote)
                     .foregroundStyle(Tokens.fg1)
                 Spacer()
-                Toggle("", isOn: $includeVideo)
+                Toggle("Include recording", isOn: $includeVideo)
                     .labelsHidden()
                     .tint(Tokens.accent)
                 Button {
                     self.videoURL = nil
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 13))
+                        .brandFont(13, relativeTo: .footnote)
                         .foregroundStyle(Tokens.fg3)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Remove recording")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -272,8 +279,8 @@ struct ReportView: View {
             .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusSm))
             if videoTooLarge(url: url) {
                 Text("Recording is larger than 20 MB — trim it to include it with the report.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Tokens.warning)
+                    .brandFont(12, relativeTo: .caption)
+                    .foregroundStyle(Tokens.warningStrong)
             }
         }
     }
@@ -305,6 +312,9 @@ struct ReportView: View {
     private func perform() async {
         progressState = IssueProgressState(progress: 0, phase: .idle)
         error = nil
+        // Tell VoiceOver the form was replaced by the progress card
+        // (4.1.3) — the transition is otherwise silent.
+        UIAccessibility.post(notification: .screenChanged, argument: "Sending report")
 
         let result = await submit(
             title.trimmingCharacters(in: .whitespaces),
@@ -318,12 +328,19 @@ struct ReportView: View {
         )
         switch result {
         case .success:
+            // Announce before the 2s auto-dismiss so VoiceOver users
+            // hear the outcome (4.1.3, SDK-N2).
+            UIAccessibility.post(notification: .announcement, argument: "Report sent")
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             onClose()
-        case .failure:
+        case .failure(let submitError):
             // Progress state already carries phase=error from the upload
-            // machine; UI shows retry/close from sendingContent.
-            break
+            // machine; UI shows retry/close from sendingContent. Surface
+            // the failure to VoiceOver as well.
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Report failed. \(submitError.localizedDescription)"
+            )
         }
     }
 

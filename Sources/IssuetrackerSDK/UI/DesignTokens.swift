@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // Trace design tokens lifted from `colors_and_type.css`. SwiftUI
 // equivalents — colors are concrete values, type uses the system
@@ -23,9 +24,17 @@ enum Tokens {
     // ---------- Lines ----------
     static let line = Color(hex: 0xDCE4ED)
     static let lineFaint = Color(hex: 0xECF1F6)
+    // Border for interactive controls (chips, text fields). `line` is
+    // too faint against white to satisfy the 3:1 non-text contrast
+    // requirement (1.4.11); keep `line` for decorative card borders.
+    static let lineControl = Color(hex: 0x949FB0)
 
     // ---------- Brand ----------
     static let accent = Color(hex: 0x1FA2E8)
+    // Darker accent for text-on-white and white-on-fill uses where
+    // #1FA2E8 fails WCAG AA (2.84:1). #1577AD gives ~4.9:1 against
+    // white. Keep `accent` for decorative/soft uses only.
+    static let accentStrong = Color(hex: 0x1577AD)
     static let accent2 = Color(hex: 0x22D3C5)
     static let accent3 = Color(hex: 0x0D7C8A)
     static let accentSoft = Color(hex: 0xDDF2FB)
@@ -35,9 +44,18 @@ enum Tokens {
     static let critical = Color(hex: 0xE03A4E)
     static let criticalSoft = Color(hex: 0xFBE3E7)
     static let warning = Color(hex: 0xE9A23B)
+    // On-white variant of `warning` for body-size text (#E9A23B is
+    // 2.17:1 on white; #8A6116 passes 4.5:1).
+    static let warningStrong = Color(hex: 0x8A6116)
     static let warningSoft = Color(hex: 0xFBEFD9)
     static let success = Color(hex: 0x1F9E72)
     static let successSoft = Color(hex: 0xDCF1E9)
+
+    // ---------- Disabled controls ----------
+    // Distinct disabled style instead of dropping opacity on the whole
+    // button (opacity 0.4 pushed text contrast below 1.5:1).
+    static let disabledFill = Color(hex: 0xC7D0D9)
+    static let disabledFg = Color(hex: 0x5B6B80)
 
     // ---------- Radius ----------
     static let radiusSm: CGFloat = 4
@@ -62,6 +80,87 @@ extension Color {
         let g = Double((hex >> 8) & 0xFF) / 255
         let b = Double(hex & 0xFF) / 255
         self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+    }
+}
+
+// ---------- Dynamic Type-aware fonts ----------
+//
+// `Font.system(size:)` is frozen — it ignores the user's text size
+// setting entirely (WCAG 1.4.4). There is no `Font.system(size:
+// relativeTo:)`, so we scale the point size ourselves through
+// UIFontMetrics, anchored to the text style each token corresponds
+// to. Implemented as a ViewModifier (instead of a static `Font`
+// helper) so the view re-renders live when the user changes the
+// text size — the modifier reads `dynamicTypeSize` from the
+// environment.
+struct BrandScaledFont: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let size: CGFloat
+    let weight: Font.Weight
+    let textStyle: Font.TextStyle
+    let design: Font.Design
+
+    func body(content: Content) -> some View {
+        let traits = UITraitCollection(
+            preferredContentSizeCategory: dynamicTypeSize.uiContentSizeCategory
+        )
+        let scaled = UIFontMetrics(forTextStyle: textStyle.uiTextStyle)
+            .scaledValue(for: size, compatibleWith: traits)
+        content.font(.system(size: scaled, weight: weight, design: design))
+    }
+}
+
+extension View {
+    /// System font of `size` at the default text size, scaling with
+    /// Dynamic Type relative to `style` — the SwiftUI equivalent of
+    /// `UIFontMetrics(forTextStyle:).scaledFont(for:)`.
+    func brandFont(
+        _ size: CGFloat,
+        _ weight: Font.Weight = .regular,
+        relativeTo style: Font.TextStyle,
+        design: Font.Design = .default
+    ) -> some View {
+        modifier(BrandScaledFont(size: size, weight: weight, textStyle: style, design: design))
+    }
+}
+
+extension Font.TextStyle {
+    var uiTextStyle: UIFont.TextStyle {
+        switch self {
+        case .largeTitle: return .largeTitle
+        case .title: return .title1
+        case .title2: return .title2
+        case .title3: return .title3
+        case .headline: return .headline
+        case .subheadline: return .subheadline
+        case .body: return .body
+        case .callout: return .callout
+        case .footnote: return .footnote
+        case .caption: return .caption1
+        case .caption2: return .caption2
+        @unknown default: return .body
+        }
+    }
+}
+
+extension DynamicTypeSize {
+    var uiContentSizeCategory: UIContentSizeCategory {
+        switch self {
+        case .xSmall: return .extraSmall
+        case .small: return .small
+        case .medium: return .medium
+        case .large: return .large
+        case .xLarge: return .extraLarge
+        case .xxLarge: return .extraExtraLarge
+        case .xxxLarge: return .extraExtraExtraLarge
+        case .accessibility1: return .accessibilityMedium
+        case .accessibility2: return .accessibilityLarge
+        case .accessibility3: return .accessibilityExtraLarge
+        case .accessibility4: return .accessibilityExtraExtraLarge
+        case .accessibility5: return .accessibilityExtraExtraExtraLarge
+        @unknown default: return .large
+        }
     }
 }
 
@@ -104,10 +203,10 @@ struct BrandButton: View {
                         .controlSize(.small)
                         .tint(fg)
                 } else if let icon {
-                    Image(systemName: icon).font(.system(size: 13, weight: .medium))
+                    Image(systemName: icon).brandFont(13, .medium, relativeTo: .footnote)
                 }
                 Text(title)
-                    .font(.system(size: 14, weight: .medium))
+                    .brandFont(14, .medium, relativeTo: .subheadline)
                     .tracking(-0.1)
             }
             .frame(minHeight: 44)
@@ -120,21 +219,28 @@ struct BrandButton: View {
                     .stroke(border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusSm))
-            .opacity(isDisabled || isLoading ? 0.4 : 1)
         }
         .disabled(isDisabled || isLoading)
         .buttonStyle(.plain)
     }
 
+    private var isInactive: Bool { isDisabled || isLoading }
+
     private var bg: Color {
+        // Disabled: a distinct still-readable style instead of dimming
+        // the whole button below usable contrast.
+        if isInactive {
+            return variant == .ghost ? .clear : Tokens.disabledFill
+        }
         switch variant {
-        case .primary: return Tokens.accent
+        case .primary: return Tokens.accentStrong
         case .secondary: return Tokens.surfaceCard
         case .ghost: return .clear
         case .danger: return Tokens.surfaceCard
         }
     }
     private var fg: Color {
+        if isInactive { return Tokens.disabledFg }
         switch variant {
         case .primary: return .white
         case .secondary, .ghost: return Tokens.fg1
@@ -142,6 +248,7 @@ struct BrandButton: View {
         }
     }
     private var border: Color {
+        if isInactive { return .clear }
         switch variant {
         case .primary, .ghost: return .clear
         case .secondary, .danger: return Tokens.line
@@ -167,10 +274,15 @@ struct BrandChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let icon {
-                    Image(systemName: icon).font(.system(size: 13, weight: .regular))
+                if isActive {
+                    // Non-color selection cue (1.4.1) alongside the tint.
+                    Image(systemName: "checkmark")
+                        .brandFont(11, .semibold, relativeTo: .caption)
                 }
-                Text(title).font(.system(size: 13, weight: .medium)).tracking(-0.1)
+                if let icon {
+                    Image(systemName: icon).brandFont(13, .regular, relativeTo: .footnote)
+                }
+                Text(title).brandFont(13, .medium, relativeTo: .footnote).tracking(-0.1)
             }
             .frame(minHeight: 36)
             .frame(maxWidth: .infinity)
@@ -179,11 +291,12 @@ struct BrandChip: View {
             .foregroundStyle(isActive ? Tokens.accent3 : Tokens.fg2)
             .overlay(
                 RoundedRectangle(cornerRadius: Tokens.radiusSm)
-                    .stroke(isActive ? Tokens.accent : Tokens.line, lineWidth: 1)
+                    .stroke(isActive ? Tokens.accentStrong : Tokens.lineControl, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusSm))
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
@@ -194,7 +307,7 @@ struct FieldLabel: View {
     let title: String
     var body: some View {
         Text(title)
-            .font(.system(size: 12, weight: .medium))
+            .brandFont(12, .medium, relativeTo: .caption)
             .foregroundStyle(Tokens.fg2)
     }
 }
@@ -204,6 +317,10 @@ struct FieldLabel: View {
 // for the description.
 struct BrandTextField: View {
     @Binding var value: String
+    // Accessible name for the field — the visual FieldLabel above the
+    // input is not programmatically associated, so pass its title here
+    // (3.3.2). Falls back to the placeholder when empty.
+    var label: String = ""
     let placeholder: String
     var multiline: Bool = false
 
@@ -217,7 +334,7 @@ struct BrandTextField: View {
                     .textInputAutocapitalization(.sentences)
             }
         }
-        .font(.system(size: 14))
+        .brandFont(14, relativeTo: .subheadline)
         .foregroundStyle(Tokens.fg1)
         .padding(.horizontal, 12)
         .padding(.vertical, multiline ? 10 : 0)
@@ -225,9 +342,10 @@ struct BrandTextField: View {
         .background(Tokens.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: Tokens.radiusSm)
-                .stroke(Tokens.line, lineWidth: 1)
+                .stroke(Tokens.lineControl, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: Tokens.radiusSm))
+        .accessibilityLabel(label.isEmpty ? placeholder : label)
     }
 }
 
@@ -240,17 +358,21 @@ struct BrandHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: Tokens.Space.s4) {
             Image(systemName: "checkmark.shield.fill")
-                .font(.system(size: 24, weight: .semibold))
+                .brandFont(24, .semibold, relativeTo: .title2)
                 .foregroundStyle(Tokens.accent)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .brandFont(16, .semibold, relativeTo: .body)
                     .foregroundStyle(Tokens.fg1)
                     .tracking(-0.3)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Tokens.fg3)
+                        .brandFont(12, .regular, relativeTo: .caption)
+                        // fg2 instead of fg3: the header also renders on
+                        // the tinted surfaceApp background (Onboarding),
+                        // where fg3 lands at 3.85:1.
+                        .foregroundStyle(Tokens.fg2)
                 }
             }
             Spacer(minLength: 0)

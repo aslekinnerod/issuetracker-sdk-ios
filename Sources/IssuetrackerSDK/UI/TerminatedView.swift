@@ -31,8 +31,10 @@ struct TerminatedView: View {
             Spacer()
 
             Image(systemName: "exclamationmark.bubble")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(Tokens.fg3)
+                .brandFont(44, .light, relativeTo: .largeTitle)
+                // fg2: fg3 on the tinted surfaceApp background is 3.85:1.
+                .foregroundStyle(Tokens.fg2)
+                .accessibilityHidden(true)
 
             VStack(spacing: Tokens.Space.s3) {
                 Text(strings?.title ?? Self.defaultTitle)

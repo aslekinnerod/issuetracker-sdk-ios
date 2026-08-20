@@ -74,6 +74,12 @@ enum CrashReporter {
                 return dict
             }
         }
+        // Auto crash reports carry attestation too — on testers-only
+        // projects an unattested crash report is (correctly) rejected
+        // at ingest, and the catch below drops it silently.
+        if let testerToken = await MainActor.run(body: { AttestationStore.shared.testerToken }) {
+            payload["testerToken"] = testerToken
+        }
 
         struct CreateResult: Decodable { let issueId: String }
         do {

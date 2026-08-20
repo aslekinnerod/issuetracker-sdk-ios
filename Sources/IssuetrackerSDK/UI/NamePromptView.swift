@@ -26,32 +26,38 @@ struct NamePromptView: View {
                 )
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .medium))
+                        .brandFont(14, .medium, relativeTo: .subheadline)
                         .foregroundStyle(Tokens.fg3)
                         .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
+                .accessibilityLabel("Close")
             }
             .padding(.horizontal, Tokens.Space.s5)
             .padding(.vertical, Tokens.Space.s4)
             Divider().background(Tokens.lineFaint)
 
-            // Body
-            VStack(alignment: .leading, spacing: Tokens.Space.s5) {
-                VStack(alignment: .leading, spacing: 6) {
-                    FieldLabel(title: "Your name")
-                    BrandTextField(
-                        value: $name,
-                        placeholder: "What should we call you?"
-                    )
-                    .focused($focused)
-                    .submitLabel(.continue)
-                    .onSubmit(submitIfValid)
+            // Body — scrolls so large Dynamic Type sizes don't clip
+            // (1.4.4 / 1.4.10).
+            ScrollView {
+                VStack(alignment: .leading, spacing: Tokens.Space.s5) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        FieldLabel(title: "Your name")
+                        BrandTextField(
+                            value: $name,
+                            label: "Your name",
+                            placeholder: "What should we call you?"
+                        )
+                        .focused($focused)
+                        .submitLabel(.continue)
+                        .onSubmit(submitIfValid)
+                    }
+                    Text("This name appears on the issues you report so the team knows who filed them.")
+                        .brandFont(12, relativeTo: .caption)
+                        .foregroundStyle(Tokens.fg3)
                 }
-                Text("This name appears on the issues you report so the team knows who filed them.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Tokens.fg3)
+                .padding(Tokens.Space.s5)
             }
-            .padding(Tokens.Space.s5)
 
             Spacer(minLength: 0)
             Divider().background(Tokens.lineFaint)

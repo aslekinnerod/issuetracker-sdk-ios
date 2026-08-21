@@ -27,7 +27,9 @@ enum Tokens {
     // Border for interactive controls (chips, text fields). `line` is
     // too faint against white to satisfy the 3:1 non-text contrast
     // requirement (1.4.11); keep `line` for decorative card borders.
-    static let lineControl = Color(hex: 0x949FB0)
+    // #949FB0 only reached 2.68:1 on white — #8791A2 gives 3.18:1
+    // (guarded by ContrastTests).
+    static let lineControl = Color(hex: 0x8791A2)
 
     // ---------- Brand ----------
     static let accent = Color(hex: 0x1FA2E8)
@@ -55,7 +57,10 @@ enum Tokens {
     // Distinct disabled style instead of dropping opacity on the whole
     // button (opacity 0.4 pushed text contrast below 1.5:1).
     static let disabledFill = Color(hex: 0xC7D0D9)
-    static let disabledFg = Color(hex: 0x5B6B80)
+    // #5B6B80 was only 3.49:1 on `disabledFill` — #495868 gives
+    // 4.67:1 so disabled labels stay AA-readable (guarded by
+    // ContrastTests).
+    static let disabledFg = Color(hex: 0x495868)
 
     // ---------- Radius ----------
     static let radiusSm: CGFloat = 4

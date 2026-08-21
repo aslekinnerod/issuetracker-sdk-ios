@@ -22,6 +22,11 @@ struct ScreenshotEditorView: View {
     // image-pixel coordinates at flatten time.
     @State private var displayedSize: CGSize = .zero
     @State private var showingCancelConfirm = false
+    // Pending "highlight box" annotation (Box tool) in display points.
+    // Lives here — not in the PencilKit drawing — until the user
+    // commits it with Place; Remove just discards it.
+    @State private var pendingBox: CGRect?
+    @AccessibilityFocusState private var boxFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -48,7 +53,20 @@ struct ScreenshotEditorView: View {
                             .resizable()
                             .scaledToFit()
                         DrawingCanvas(canvas: $canvas, tool: currentTool)
-                            .allowsHitTesting(mode != .crop)
+                            .allowsHitTesting(mode != .crop && mode != .box)
+                        if mode == .box, pendingBox != nil {
+                            BoxAnnotationOverlay(
+                                rect: Binding(
+                                    get: { pendingBox ?? centeredBox(in: size) },
+                                    set: { pendingBox = $0 }
+                                ),
+                                color: color,
+                                imageSize: size,
+                                onPlace: { placePendingBox() },
+                                onRemove: { removePendingBox() }
+                            )
+                            .accessibilityFocused($boxFocused)
+                        }
                         if mode == .crop {
                             CropOverlay(
                                 rect: Binding(
@@ -72,14 +90,19 @@ struct ScreenshotEditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 EditorToolbar(
-                    mode: $mode,
+                    // Intercepted so entering Box mode seeds the
+                    // pending box and leaving it commits the box —
+                    // switching tools never silently drops work.
+                    mode: Binding(get: { mode }, set: { setMode($0) }),
                     color: $color,
+                    hasPendingBox: pendingBox != nil,
                     onUndo: { canvas.undoManager?.undo() },
                     onResetCrop: {
                         if displayedSize.width > 0 {
                             cropRect = CropRect(origin: .zero, size: displayedSize)
                         }
-                    }
+                    },
+                    onPlaceBox: { placePendingBox() }
                 )
             }
             .background(Color.black.ignoresSafeArea())
@@ -97,6 +120,9 @@ struct ScreenshotEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        // A positioned-but-unplaced box is intentional
+                        // work — commit it rather than dropping it.
+                        commitPendingBoxIfNeeded()
                         onDone(flatten())
                     }
                 }
@@ -114,8 +140,78 @@ struct ScreenshotEditorView: View {
 
     private func hasChanges() -> Bool {
         if !canvas.drawing.strokes.isEmpty { return true }
+        if pendingBox != nil { return true }
         if cropRect != nil && isCropMeaningful() { return true }
         return false
+    }
+
+    // MARK: - Box tool (non-drag annotation, ISU-38)
+
+    // Routes every toolbar mode change so Box entry/exit stays
+    // consistent: entering seeds a centred pending box, leaving
+    // commits whatever the user positioned.
+    private func setMode(_ newMode: EditorMode) {
+        if mode == .box, newMode != .box {
+            commitPendingBoxIfNeeded()
+        }
+        mode = newMode
+        if newMode == .box, pendingBox == nil, displayedSize.width > 0 {
+            pendingBox = centeredBox(in: displayedSize)
+            // Move VoiceOver to the new box so its custom actions are
+            // immediately discoverable.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                boxFocused = true
+            }
+        }
+    }
+
+    // ~30% of the image wide, centred — big enough to see, small
+    // enough to make the "what does this highlight" question obvious.
+    private func centeredBox(in size: CGSize) -> CGRect {
+        let w = size.width * 0.3
+        let h = size.height * 0.2
+        return CGRect(
+            x: (size.width - w) / 2,
+            y: (size.height - h) / 2,
+            width: w,
+            height: h
+        )
+    }
+
+    private func placePendingBox() {
+        guard commitPendingBoxIfNeeded() else { return }
+        mode = .pen
+        UIAccessibility.post(notification: .announcement, argument: "Highlight box placed")
+    }
+
+    private func removePendingBox() {
+        pendingBox = nil
+        mode = .pen
+        UIAccessibility.post(notification: .announcement, argument: "Highlight box removed")
+    }
+
+    @discardableResult
+    private func commitPendingBoxIfNeeded() -> Bool {
+        guard let box = pendingBox else { return false }
+        let stroke = BoxAnnotation.stroke(for: box, color: UIColor(color))
+        var drawing = canvas.drawing
+        drawing.strokes.append(stroke)
+        Self.setDrawing(drawing, on: canvas)
+        pendingBox = nil
+        return true
+    }
+
+    // Programmatic PKDrawing changes bypass PKCanvasView's own undo
+    // registration, so register one ourselves. The mutual re-
+    // registration inside the closure gives redo for free, and the
+    // whole box lands as a single undo step — same stack, same Undo
+    // button as freehand strokes.
+    private static func setDrawing(_ drawing: PKDrawing, on canvas: PKCanvasView) {
+        let previous = canvas.drawing
+        canvas.undoManager?.registerUndo(withTarget: canvas) { target in
+            setDrawing(previous, on: target)
+        }
+        canvas.drawing = drawing
     }
 
     private var currentTool: PKTool {
@@ -126,9 +222,9 @@ struct ScreenshotEditorView: View {
             return PKInkingTool(.marker, color: UIColor(color).withAlphaComponent(0.45), width: 18)
         case .eraser:
             return PKEraserTool(.vector)
-        case .crop:
+        case .box, .crop:
             // Placeholder while drawing is locked — any inking tool
-            // works, the canvas has hit-testing disabled in crop mode.
+            // works, the canvas has hit-testing disabled in these modes.
             return PKInkingTool(.pen, color: UIColor(color), width: 4)
         }
     }

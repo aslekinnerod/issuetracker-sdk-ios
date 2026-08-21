@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum EditorMode: Hashable {
-    case pen, highlighter, eraser, crop
+    case pen, highlighter, eraser, box, crop
 }
 
 // Five colours keep the picker to one row. Red dominates for bug
@@ -13,15 +13,18 @@ let editorColorPalette: [Color] = [
 struct EditorToolbar: View {
     @Binding var mode: EditorMode
     @Binding var color: Color
+    var hasPendingBox: Bool
     var onUndo: () -> Void
     var onResetCrop: () -> Void
+    var onPlaceBox: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 16) {
+            HStack(spacing: 8) {
                 modeButton(.pen, system: "pencil.tip", label: "Pen")
                 modeButton(.highlighter, system: "highlighter", label: "Highlight")
                 modeButton(.eraser, system: "eraser", label: "Eraser")
+                modeButton(.box, system: "rectangle", label: "Box")
                 modeButton(.crop, system: "crop", label: "Crop")
                 Spacer()
                 if mode == .crop {
@@ -31,6 +34,16 @@ struct EditorToolbar: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Reset crop")
+                } else if mode == .box {
+                    // Commits the pending box into the drawing layer —
+                    // the non-drag path to finish the annotation.
+                    Button(action: onPlaceBox) {
+                        Image(systemName: "checkmark")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .disabled(!hasPendingBox)
+                    .accessibilityLabel("Place highlight box")
                 } else {
                     Button(action: onUndo) {
                         Image(systemName: "arrow.uturn.backward")
@@ -43,7 +56,7 @@ struct EditorToolbar: View {
             .font(.title3)
             .padding(.horizontal, 4)
 
-            if mode == .pen || mode == .highlighter {
+            if mode == .pen || mode == .highlighter || mode == .box {
                 HStack(spacing: 4) {
                     ForEach(editorColorPalette, id: \.self) { c in
                         Button {
@@ -82,7 +95,10 @@ struct EditorToolbar: View {
                 Text(label).font(.caption2)
             }
             .foregroundStyle(mode == m ? Color.accentColor : Color.primary)
-            .frame(width: 54, height: 44)
+            // 50pt (down from 54) so five modes + the trailing action
+            // still fit a 375pt-wide phone; stays above the 44pt
+            // target minimum.
+            .frame(width: 50, height: 44)
             .contentShape(Rectangle())
         }
         .accessibilityAddTraits(mode == m ? .isSelected : [])

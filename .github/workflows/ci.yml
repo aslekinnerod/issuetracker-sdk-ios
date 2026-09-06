@@ -4,21 +4,156 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by release.yml so cutting a tag re-runs exactly these checks on
+  # the tagged commit before anything is published.
+  workflow_call:
+
+# The jobs only check out and compile. Without this block the job inherits the
+# repo/org default, which on older repos is read/write on every scope.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Runner image and Xcode major are pinned here so the compiler that builds a
+  # published SDK moves only when this file moves. Patch releases inside the
+  # major are allowed: the image ships simulator runtimes matched to its newest
+  # Xcode, so pinning an exact patch that later gets pulled from the image would
+  # break CI for no safety gain. Every job prints the toolchain it resolved.
+  XCODE_VERSION: "26"
 
 jobs:
-  build:
-    runs-on: macos-latest
+  build-test:
+    name: SwiftPM build + test
+    runs-on: macos-26
+    # macos-26 is a 10x-billed runner and the GitHub default timeout is
+    # 6 hours. A wedged simulator or a hung `brew install` should cost
+    # minutes, not a day's budget. sdk-tvos got these in the same round.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Build for iOS
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Record toolchain
         run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+      - name: Resolve simulator
+        id: sim
+        run: bash .github/scripts/resolve-simulator.sh
+
+      # Consumers compile this SDK under Release, so CI has to as well:
+      # whole-module optimization and dead-code elimination surface failures
+      # (especially in the SwiftUI/PencilKit views) that Debug never sees.
+      # This is also the only step that compiles the arm64 device slice.
+      - name: Build (Release, device slice)
+        run: |
+          set -euo pipefail
           xcodebuild \
             -scheme IssuetrackerSDK \
+            -configuration Release \
             -destination 'generic/platform=iOS' \
-            build
-      - name: Test on iOS Simulator
+            -derivedDataPath .derived-release \
+            build \
+            | xcbeautify --renderer github-actions
+
+      # build-for-testing + test-without-building share one derived data dir,
+      # so the package is compiled once for the test run instead of twice.
+      - name: Build for testing (Debug, simulator)
         run: |
+          set -euo pipefail
           xcodebuild \
             -scheme IssuetrackerSDK \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
-            test
+            -configuration Debug \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath .derived-test \
+            build-for-testing \
+            | xcbeautify --renderer github-actions
+      - name: Test
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -scheme IssuetrackerSDK \
+            -configuration Debug \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath .derived-test \
+            -resultBundlePath TestResults.xcresult \
+            test-without-building \
+            | xcbeautify --renderer github-actions
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results
+          path: TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+
+  pod-lint:
+    # The SDK ships two consumption paths and CI used to compile only one.
+    # `pod lib lint` builds the pod the way CocoaPods consumers (and the
+    # Flutter / React Native wrappers) build it: SWIFT_PACKAGE undefined, so
+    # the #else branch of Bundle.sdkResources in UI/OnboardingView.swift is
+    # type-checked and linked, and source_files / frameworks / resource_bundles
+    # in the podspec are validated against the sources that actually exist.
+    name: CocoaPods lint
+    runs-on: macos-26
+    # macos-26 is a 10x-billed runner and the GitHub default timeout is
+    # 6 hours. A wedged simulator or a hung `brew install` should cost
+    # minutes, not a day's budget. sdk-tvos got these in the same round.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          pod --version
+      - name: pod lib lint
+        run: pod lib lint IssuetrackerSDK.podspec --allow-warnings --fail-fast
+
+  example-app:
+    # Nothing else builds the SDK inside a real app target. This job also
+    # proves example-app/project.yml still generates (the .xcodeproj is
+    # gitignored, so the spec is otherwise never exercised outside a laptop)
+    # and that the SDK's public API still compiles against ContentView.swift.
+    name: Example app
+    runs-on: macos-26
+    # macos-26 is a 10x-billed runner and the GitHub default timeout is
+    # 6 hours. A wedged simulator or a hung `brew install` should cost
+    # minutes, not a day's budget. sdk-tvos got these in the same round.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: example-app
+        run: xcodegen generate
+      - name: Resolve simulator
+        id: sim
+        run: bash .github/scripts/resolve-simulator.sh
+      - name: Build example app
+        working-directory: example-app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project IssuetrackerExample.xcodeproj \
+            -scheme IssuetrackerExample \
+            -configuration Debug \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath .derived \
+            CODE_SIGNING_ALLOWED=NO \
+            build \
+            | xcbeautify --renderer github-actions

@@ -3,6 +3,9 @@
 /Packages
 xcuserdata/
 DerivedData/
+# Derived data / result bundles produced by the CI commands when run locally.
+.derived*/
+*.xcresult/
 .swiftpm/configuration/
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
 .netrc

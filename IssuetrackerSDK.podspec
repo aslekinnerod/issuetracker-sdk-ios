@@ -16,7 +16,9 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.9'
 
   s.source_files     = 'Sources/IssuetrackerSDK/**/*.swift'
-  s.frameworks       = 'UIKit', 'Foundation', 'CoreMotion', 'MetricKit', 'ReplayKit'
+  # Keep in sync with the imports in Sources/ (SwiftUI and PencilKit were
+  # missing here until the CocoaPods path started being linted in CI).
+  s.frameworks       = 'UIKit', 'Foundation', 'SwiftUI', 'CoreMotion', 'MetricKit', 'PencilKit', 'ReplayKit'
 
   # Asset catalog with onboarding illustrations. Declared as a
   # resource_bundle so CocoaPods generates `IssuetrackerSDK.bundle`

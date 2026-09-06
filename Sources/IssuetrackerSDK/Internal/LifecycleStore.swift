@@ -14,7 +14,29 @@ import Foundation
 /// retrying via the existing UI.
 @MainActor
 final class LifecycleStore {
-    static let shared = LifecycleStore()
+    private static var _shared = LifecycleStore()
+
+    /// Process-wide lifecycle. Every dispatch site (`AttestationStore`,
+    /// `ReportingSession`, `CrashReporter`) and every trigger surface
+    /// reads this instance.
+    static var shared: LifecycleStore { _shared }
+
+    #if DEBUG
+    /// Test-only seam. The dispatch paths reach the lifecycle through
+    /// ``shared``, so an end-to-end test of "server says the project is
+    /// gone → SDK terminates" has to swap in a store backed by a
+    /// throwaway `UserDefaults` suite — otherwise the one-way
+    /// transition would leak into `UserDefaults.standard` and into
+    /// every later test in the process. Returns the previous instance
+    /// so the caller can restore it in `tearDown`. Compiled out of
+    /// release builds.
+    @discardableResult
+    static func _swapSharedForTesting(_ store: LifecycleStore) -> LifecycleStore {
+        let previous = _shared
+        _shared = store
+        return previous
+    }
+    #endif
 
     /// Posted (main queue) on the one-way OK → TERMINATED transition.
     /// Lets UI surfaces owned by the SDK (the ADR-0008 floating report

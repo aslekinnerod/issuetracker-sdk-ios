@@ -92,6 +92,11 @@ flow, breadcrumbs, and troubleshooting — see
 - Swift 5.9+
 - Xcode 15+
 
+CI builds and tests on the current Xcode 26 toolchain against the newest
+iOS simulator runtime on the runner image. Older Xcode versions and the
+iOS 16 runtime floor are supported by declaration (deployment target and
+`swift-tools-version`), not by an automated test run.
+
 ## License
 
 MIT

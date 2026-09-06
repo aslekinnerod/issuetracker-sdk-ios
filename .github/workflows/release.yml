@@ -1,0 +1,76 @@
+name: Release
+
+# Publishing used to be a human running `pod trunk push` from a laptop: a tag
+# could be cut from a commit CI never ran (or ran red on), the podspec version
+# and the tag could disagree, and afterwards nothing recorded which commit
+# became which released version. This workflow is the record.
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+# Never cancel a release mid-publish; two different tags get two groups.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  XCODE_VERSION: "26"
+
+jobs:
+  # Re-runs the full CI suite (SwiftPM build + tests, pod lib lint, example
+  # app) against the tagged commit itself, so "the tag is green" is a fact
+  # about this commit rather than about whatever main looked like.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: verify
+    runs-on: macos-26
+    permissions:
+      contents: write # creating the GitHub Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      # s.source in the podspec derives the git tag from s.version, so a
+      # bumped tag with an un-bumped podspec publishes the previous version's
+      # sources under the new name. Evaluate the podspec (rather than grep it)
+      # and refuse to publish on a mismatch.
+      - name: Assert podspec version matches tag
+        run: |
+          set -euo pipefail
+          spec_version=$(pod ipc spec IssuetrackerSDK.podspec | jq -r .version)
+          if [ "$spec_version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::podspec s.version is '${spec_version}' but the tag is" \
+                 "'${GITHUB_REF_NAME}'. Bump IssuetrackerSDK.podspec and re-tag."
+            exit 1
+          fi
+          echo "podspec version ${spec_version} matches tag ${GITHUB_REF_NAME}"
+
+      # Without this the push fails somewhere inside CocoaPods with a less
+      # obvious message, or waits on a prompt.
+      - name: Check trunk token is configured
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${COCOAPODS_TRUNK_TOKEN:-}" ]; then
+            echo "::error::COCOAPODS_TRUNK_TOKEN secret is not configured;" \
+                 "the pod cannot be published from CI."
+            exit 1
+          fi
+
+      - name: Publish to CocoaPods trunk
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        run: pod trunk push IssuetrackerSDK.podspec --allow-warnings
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes

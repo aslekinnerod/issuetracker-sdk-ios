@@ -409,9 +409,9 @@ final class LifecycleTerminationTests: XCTestCase {
     ///
     /// `PendingCrashStore` is the SDK's only on-disk queue of
     /// undelivered reports (crash markers awaiting MetricKit
-    /// confirmation, retained for 7 days). The marker half of the
-    /// invariant is implemented; the drop half is not — see the audit
-    /// finding on `LifecycleStore.swift:63`.
+    /// confirmation, retained for 7 days). Both halves are now
+    /// implemented in `transitionToTerminated`: persist the marker,
+    /// then drop the queue.
     func testTerminationPurgesThePendingReportQueue() async {
         let sessionId = "test-\(UUID().uuidString)"
         addTeardownBlock { PendingCrashStore.shared.remove(sessionId: sessionId) }
@@ -438,23 +438,62 @@ final class LifecycleTerminationTests: XCTestCase {
         await attestation.refreshRemoteConfig(runtime: runtime())
         XCTAssertTrue(store.isTerminated)
 
-        XCTExpectFailure(
-            "GAP (ADR-0003 D9 §2 + §6): transitionToTerminated persists the marker " +
-            "but never drops the queue, so PendingCrashStore entries survive " +
-            "termination and are still delivered when MetricKit confirms them."
-        ) {
-            XCTAssertFalse(
-                PendingCrashStore.shared.list().contains { $0.sessionId == sessionId },
-                "the local queue must be purged on the first TERMINATED signal"
-            )
-        }
+        XCTAssertFalse(
+            PendingCrashStore.shared.list().contains { $0.sessionId == sessionId },
+            "the local queue must be purged on the first TERMINATED signal"
+        )
+        XCTAssertEqual(
+            PendingCrashStore.shared.list().count, 0,
+            "the drop is atomic — the whole queue goes, not just matching entries"
+        )
+    }
+
+    /// The purge is worthless if the next `configure()` refills the
+    /// queue. `CrashReporter.reportCrashIfAny` is what promotes the
+    /// previous session's marker into `PendingCrashStore`, and it runs
+    /// on every launch — so it has to honour the lifecycle too.
+    func testTerminatedSdkDoesNotRepopulateTheQueueOnNextLaunch() {
+        defaults.set("project_deleted", forKey: "io.issuetracker.sdk.terminatedReason")
+        defaults.set(Date().timeIntervalSince1970, forKey: "io.issuetracker.sdk.terminatedAt")
+        LifecycleStore._swapSharedForTesting(LifecycleStore(defaults: defaults))
+
+        let sessionId = "test-\(UUID().uuidString)"
+        addTeardownBlock { PendingCrashStore.shared.remove(sessionId: sessionId) }
+        PendingCrashStore.shared.add(PendingCrashMarker(
+            sessionId: sessionId,
+            startedAt: Date(),
+            endedAt: Date(),
+            appVersion: "1.0",
+            osVersion: "18.0",
+            lastLifecycleState: .active,
+            breadcrumbs: []
+        ))
+
+        CrashReporter.reportCrashIfAny()
+
+        XCTAssertEqual(
+            PendingCrashStore.shared.list().count, 0,
+            "a terminated install must re-purge on launch, never repopulate"
+        )
+    }
+
+    /// Guard against over-correcting: a healthy SDK still tracks
+    /// sessions and still queues an unfinished one for MetricKit.
+    func testHealthySdkStillTracksCrashesOnLaunch() {
+        XCTAssertFalse(LifecycleStore.shared.isTerminated, "precondition: OK state")
+        let before = PendingCrashStore.shared.list().count
+        CrashReporter.reportCrashIfAny()
+        XCTAssertGreaterThanOrEqual(
+            PendingCrashStore.shared.list().count, before,
+            "an OK SDK must not have its crash pipeline gated off"
+        )
     }
 
     // MARK: - The SDK stops talking to the server
 
     /// A terminated SDK must not call the report endpoint again. The
-    /// crash-report path is a background task with no pre-flight gate —
-    /// see the audit finding on `CrashReporter.swift:38`.
+    /// crash-report path is a background task, so it carries its own
+    /// pre-flight gate — the twin of `ReportingSession.present`'s.
     func testTerminatedSdkDoesNotUploadCrashReports() async {
         defaults.set("project_deleted", forKey: "io.issuetracker.sdk.terminatedReason")
         defaults.set(Date().timeIntervalSince1970, forKey: "io.issuetracker.sdk.terminatedAt")
@@ -476,15 +515,105 @@ final class LifecycleTerminationTests: XCTestCase {
             cause: .appExit(reason: "watchdog")
         )
 
-        XCTExpectFailure(
-            "GAP (ADR-0003 D9 §2): CrashReporter.sendConfirmedCrash has no " +
-            "LifecycleStore pre-flight gate, so a terminated install keeps POSTing " +
-            "createIssueFromSdk on every MetricKit delivery."
-        ) {
-            XCTAssertEqual(
-                CallableStub.requestCount(for: reportFunction), 0,
-                "a terminated SDK must not call the report endpoint"
+        XCTAssertEqual(
+            CallableStub.requestCount(for: reportFunction), 0,
+            "a terminated SDK must not call the report endpoint"
+        )
+        XCTAssertEqual(
+            CallableStub.totalRequestCount, 0,
+            "and must not call anything else either"
+        )
+    }
+
+    /// The other half of ITD-164's config finding: `configure()` fires
+    /// `getSdkConfig` on every launch, so an ungated refresh is what
+    /// turns one deleted project into forever-traffic from the whole
+    /// deployed cohort.
+    func testTerminatedSdkDoesNotFetchRemoteConfig() async {
+        defaults.set("project_deleted", forKey: "io.issuetracker.sdk.terminatedReason")
+        defaults.set(Date().timeIntervalSince1970, forKey: "io.issuetracker.sdk.terminatedAt")
+        LifecycleStore._swapSharedForTesting(LifecycleStore(defaults: defaults))
+
+        // Five launches of a terminated install.
+        for _ in 0..<5 {
+            CallableStub.enqueueSuccess(
+                function: configFunction,
+                result: ["requireTesterAttestation": false]
             )
+            await attestation.refreshRemoteConfig(runtime: runtime())
+        }
+
+        XCTAssertEqual(
+            CallableStub.requestCount(for: configFunction), 0,
+            "a terminated install must stop fetching config, on every launch forever"
+        )
+    }
+
+    // MARK: - …but a healthy SDK keeps working
+
+    /// The gates are on TERMINATED, not on everything. If these break,
+    /// the SDK is silently dead for every healthy integrator.
+    func testHealthySdkStillFetchesRemoteConfigAndAdoptsIt() async {
+        CallableStub.enqueueSuccess(
+            function: configFunction,
+            result: ["requireTesterAttestation": true]
+        )
+        attestation.install(runtime: runtime(apiKey: "it_dev_stub"))
+        await attestation.refreshRemoteConfig(runtime: runtime())
+
+        XCTAssertEqual(CallableStub.requestCount(for: configFunction), 1)
+        XCTAssertFalse(
+            attestation.canTriggerReport,
+            "the fetched requireTesterAttestation=true must have been adopted"
+        )
+    }
+
+    func testHealthySdkStillUploadsCrashReports() async {
+        XCTAssertFalse(store.isTerminated, "precondition: OK state")
+        CallableStub.enqueueSuccess(function: reportFunction, result: ["issueId": "abc"])
+        await CrashReporter.sendConfirmedCrash(
+            runtime: runtime(),
+            marker: PendingCrashMarker(
+                sessionId: UUID().uuidString,
+                startedAt: Date(),
+                endedAt: Date(),
+                appVersion: "1.0",
+                osVersion: "18.0",
+                lastLifecycleState: .active,
+                breadcrumbs: []
+            ),
+            cause: .appExit(reason: "watchdog")
+        )
+
+        XCTAssertEqual(CallableStub.requestCount(for: reportFunction), 1)
+        XCTAssertFalse(store.isTerminated, "a 200 must not terminate anything")
+    }
+
+    /// A recoverable failure on the background crash path must leave
+    /// the SDK alive — the crash-path dispatch added for ITD-164 must
+    /// not become a hair-trigger.
+    func testRecoverableErrorOnCrashUploadDoesNotTerminate() async {
+        for (status, error) in [(429, "quota_exceeded"), (503, "transient")] {
+            CallableStub.enqueueError(
+                function: reportFunction,
+                status: status,
+                error: error,
+                recoverable: true
+            )
+            await CrashReporter.sendConfirmedCrash(
+                runtime: runtime(),
+                marker: PendingCrashMarker(
+                    sessionId: UUID().uuidString,
+                    startedAt: Date(),
+                    endedAt: Date(),
+                    appVersion: "1.0",
+                    osVersion: "18.0",
+                    lastLifecycleState: .active,
+                    breadcrumbs: []
+                ),
+                cause: .appExit(reason: "watchdog")
+            )
+            XCTAssertFalse(store.isTerminated, "\(error) on the crash path is recoverable")
         }
     }
 
@@ -513,15 +642,103 @@ final class LifecycleTerminationTests: XCTestCase {
         )
         XCTAssertEqual(CallableStub.requestCount(for: reportFunction), 1, "precondition: it called")
 
-        XCTExpectFailure(
-            "GAP (ADR-0003 D9 §1): CrashReporter swallows every error from the " +
-            "callable — it never inspects details.error — so a project deleted while " +
-            "the app was in the background never trips TERMINATED on this path."
-        ) {
-            XCTAssertTrue(
-                store.isTerminated,
-                "api_key_revoked on the crash-upload path must terminate the SDK"
+        XCTAssertTrue(
+            store.isTerminated,
+            "api_key_revoked on the crash-upload path must terminate the SDK"
+        )
+        guard case .terminated(let reason, _) = store.state else {
+            return XCTFail("expected .terminated")
+        }
+        XCTAssertEqual(reason, .apiKeyRevoked, "the crash path must report the wire reason")
+    }
+
+    // MARK: - ITD-163: one termination predicate per platform
+
+    /// Every dispatch site on this platform reads the same predicate,
+    /// `SdkErrorReason.isTerminal`. This pins that they agree — drive
+    /// the config path and the background crash path with the identical
+    /// reason and assert both reach the identical lifecycle.
+    ///
+    /// The reason this is a test and not a code-reading exercise:
+    /// `recoverable` and `isTerminal` are NOT interchangeable. ADR-0005's
+    /// tester-gating reasons are `recoverable: false` but deliberately
+    /// non-terminal, so a path that dispatched on `!recoverable` would
+    /// permanently kill an install the other paths keep alive. Those two
+    /// reasons are what make this matrix bite.
+    func testConfigAndCrashPathsShareOneTerminationPredicate() async {
+        for reason in SdkErrorReason.allCases {
+            let expected = reason.isTerminal
+
+            let configTerminated = await drive(reason: reason, via: configFunction) { rt, att in
+                await att.refreshRemoteConfig(runtime: rt)
+            }
+            let crashTerminated = await drive(reason: reason, via: reportFunction) { rt, _ in
+                await CrashReporter.sendConfirmedCrash(
+                    runtime: rt,
+                    marker: PendingCrashMarker(
+                        sessionId: UUID().uuidString,
+                        startedAt: Date(),
+                        endedAt: Date(),
+                        appVersion: "1.0",
+                        osVersion: "18.0",
+                        lastLifecycleState: .active,
+                        breadcrumbs: []
+                    ),
+                    cause: .appExit(reason: "watchdog")
+                )
+            }
+
+            XCTAssertEqual(
+                configTerminated, expected,
+                "config path disagrees with isTerminal for \(reason.rawValue)"
+            )
+            XCTAssertEqual(
+                crashTerminated, expected,
+                "crash path disagrees with isTerminal for \(reason.rawValue)"
+            )
+            XCTAssertEqual(
+                configTerminated, crashTerminated,
+                "the two dispatch paths must agree on \(reason.rawValue)"
             )
         }
+    }
+
+    /// Guards the predicate itself: `isTerminal` must not be an alias
+    /// for `!isRecoverable`. If someone ever collapses the two, this
+    /// fails before the matrix above gets a chance to.
+    func testTerminalIsNotAnAliasForNonRecoverable() {
+        let divergent = SdkErrorReason.allCases.filter { !$0.isRecoverable && !$0.isTerminal }
+        XCTAssertEqual(
+            Set(divergent.map(\.rawValue)),
+            ["tester_attestation_required", "tester_token_invalid"],
+            "non-recoverable-but-not-terminal is a real category — see ADR-0005"
+        )
+    }
+
+    /// Runs one dispatch path against a virgin lifecycle store and
+    /// reports whether it terminated. Each call gets its own
+    /// `UserDefaults` suite because TERMINATED is one-way — a shared
+    /// store would make every case after the first vacuously true.
+    private func drive(
+        reason: SdkErrorReason,
+        via function: String,
+        _ body: (Runtime, AttestationStore) async -> Void
+    ) async -> Bool {
+        let name = "\(suiteName!).\(function).\(reason.rawValue)"
+        let scratch = UserDefaults(suiteName: name)!
+        defer { scratch.removePersistentDomain(forName: name) }
+        let fresh = LifecycleStore(defaults: scratch)
+        LifecycleStore._swapSharedForTesting(fresh)
+
+        CallableStub.enqueueError(
+            function: function,
+            // Status deliberately mismatched with the reason: the
+            // contract says dispatch on details.error, never the status.
+            status: 418,
+            error: reason.rawValue,
+            recoverable: reason.isRecoverable
+        )
+        await body(runtime(), AttestationStore(defaults: scratch))
+        return fresh.isTerminated
     }
 }

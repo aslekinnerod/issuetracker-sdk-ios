@@ -58,10 +58,13 @@ public enum Issuetracker {
     ///     key revoked, workspace suspended, etc. — see
     ///     ``SdkErrorReason``). Default behaviour is silent in
     ///     production; host apps may forward this to their own
-    ///     telemetry. Once invoked, the SDK will not call the report
-    ///     endpoint again for the lifetime of this install — recovery
-    ///     requires a fresh `configure(apiKey:)` (typically an app
-    ///     relaunch). See ADR-0003 Decision 9.
+    ///     telemetry. Once invoked, the SDK makes no further network
+    ///     calls for the lifetime of this install: it stops fetching
+    ///     config, stops uploading crashes, drops its local queue, and
+    ///     shows the terminal message to anyone who opens the reporting
+    ///     surface. The state is persisted, one-way, and install-wide —
+    ///     calling `configure(apiKey:)` again does NOT clear it, not
+    ///     even with a different key. See ADR-0003 Decision 9.
     ///   - showOnboarding: If `true`, presents a one-time popover on
     ///     first launch that teaches the user which gestures trigger
     ///     the reporter — only the gestures currently enabled are
@@ -121,14 +124,40 @@ public enum Issuetracker {
         // `report()` path as the host-app button the README asks for.
         AccessibilityActionObserver.setEnabled(accessibilityAction)
         FloatingReportButton.shared.setEnabled(showReportButton)
+
+        // ADR-0003 Decision 9 §2: a TERMINATED install performs no
+        // network calls and starts no background work, on this launch
+        // or any future one. Everything below this point either talks
+        // to the server or feeds something that eventually will, so it
+        // is all skipped — the config refresh (otherwise a `getSdkConfig`
+        // POST on every single launch, forever), the onboarding popover
+        // (there is nothing left to teach), and the whole crash
+        // pipeline (marker promotion + MetricKit subscription).
+        //
+        // The gesture triggers installed above deliberately stay: §5
+        // requires that a tester who opens the reporting surface sees
+        // the terminal message, and `ReportingSession.present` gates on
+        // the same lifecycle to show it. Terminated means "stops
+        // talking", not "goes silent on the tester".
+        if LifecycleStore.shared.isTerminated {
+            // Re-purge in case this install was terminated by an older
+            // build that persisted the marker without dropping the
+            // queue. Idempotent and disk-only.
+            CrashReporter.reportCrashIfAny()
+            return
+        }
+
         Task { @MainActor in
             await AttestationStore.shared.refreshRemoteConfig(runtime: rt)
             // Onboarding waits for the config refresh so we never
             // advertise gestures that are gated off for this install —
             // and never wrongly suppress it on a prod key's first
             // launch just because the fail-closed default was still in
-            // effect.
-            if showOnboarding, AttestationStore.shared.canTriggerReport {
+            // effect. A terminal error on that refresh flips the SDK
+            // mid-launch, so re-check before advertising anything.
+            if showOnboarding,
+               !LifecycleStore.shared.isTerminated,
+               AttestationStore.shared.canTriggerReport {
                 OnboardingPresenter.presentIfNeeded(
                     shakeEnabled: shakeToReport,
                     longPressEnabled: longPressToReport

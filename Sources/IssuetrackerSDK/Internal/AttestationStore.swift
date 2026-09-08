@@ -49,6 +49,15 @@ final class AttestationStore {
     }
 
     func refreshRemoteConfig(runtime: Runtime) async {
+        // ADR-0003 Decision 9 §2: a TERMINATED install makes no network
+        // calls. Without this gate every launch of a terminated install
+        // POSTs `getSdkConfig` forever — the config fetch is the one
+        // call that runs unconditionally from `configure()`, so it is
+        // exactly the path that turns one dead project into sustained
+        // background traffic from the whole deployed cohort. Gated here
+        // rather than only at the call site so every caller inherits it.
+        guard !LifecycleStore.shared.isTerminated else { return }
+
         struct ConfigResult: Decodable { let requireTesterAttestation: Bool }
         do {
             let result: ConfigResult = try await APIClient.call(

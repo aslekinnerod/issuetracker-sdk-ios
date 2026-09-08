@@ -69,6 +69,24 @@ final class PendingCrashStore {
         }
     }
 
+    /// Drops every queued marker. ADR-0003 Decision 9 §6: the local
+    /// queue is dropped on the first TERMINATED signal.
+    ///
+    /// Safe to lose data here *only* because every marker in this
+    /// directory is addressed to the one project this install is bound
+    /// to, and TERMINATED is one-way and install-wide — nothing in the
+    /// queue can ever be delivered anywhere. Deleting the directory
+    /// wholesale (rather than file-by-file off `list()`) also takes out
+    /// entries this build can't decode, so a schema change can't leave
+    /// undeliverable residue behind.
+    func purgeAll() {
+        try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+    }
+
     private func fileURL(for sessionId: String) -> URL {
         directory.appendingPathComponent("\(sessionId).json")
     }

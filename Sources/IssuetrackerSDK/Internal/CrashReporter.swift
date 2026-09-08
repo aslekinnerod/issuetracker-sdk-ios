@@ -11,6 +11,20 @@ import Foundation
 enum CrashReporter {
 
     static func reportCrashIfAny() {
+        // ADR-0003 Decision 9 §2 + §6. A terminated install must not
+        // start crash tracking at all: promoting last session's marker
+        // into PendingCrashStore here is what *repopulates* the queue
+        // on every launch, so the purge done at the transition would
+        // otherwise be undone by the very next `configure()`. Re-purge
+        // (cheap, idempotent) to catch an install that was terminated
+        // by a build without the transition-time purge, and drop the
+        // live session marker so nothing is left to promote later.
+        guard !LifecycleStore.shared.isTerminated else {
+            PendingCrashStore.shared.purgeAll()
+            CrashDetector.shared.clearUnfinishedMarker()
+            return
+        }
+
         if let marker = CrashDetector.shared.readUnfinishedSession() {
             let crumbs = BreadcrumbStore.shared.snapshot()
             BreadcrumbStore.shared.clear()
@@ -37,6 +51,13 @@ enum CrashReporter {
         marker: PendingCrashMarker,
         cause: ConfirmedCrashCause
     ) async {
+        // ADR-0003 Decision 9 §2 pre-flight gate, the twin of the one
+        // in `ReportingSession.present`. MetricKit delivers 0–24h after
+        // the event and calls straight in here, so without this a
+        // terminated install keeps POSTing `createIssueFromSdk` from
+        // the background where no manual test would ever see it.
+        guard !LifecycleStore.shared.isTerminated else { return }
+
         let description = buildDescription(marker: marker, cause: cause)
         var crashReport: [String: Any] = [
             "detectedAt": Int(Date().timeIntervalSince1970 * 1000),
@@ -88,6 +109,24 @@ enum CrashReporter {
                 function: "createIssueFromSdk",
                 payload: payload
             )
+        } catch let err as APIClient.CallableError {
+            // ADR-0003 Decision 9 §1: dispatch on `details.error`, not
+            // on the HTTP status, and do it on *every* path that talks
+            // to the callable — a project deleted while the app was
+            // backgrounded is first learned about here, and swallowing
+            // it left the SDK live until some later foreground submit
+            // happened to hit the same wall. Same predicate
+            // (`SdkErrorReason.isTerminal`) as the config and submit
+            // paths, so tester-gating rejections (ADR-0005) stay
+            // non-terminal here too: an unattested crash upload is
+            // correctly rejected without killing the install.
+            if let reason = err.sdkErrorReason, reason.isTerminal {
+                LifecycleStore.shared.transitionToTerminated(
+                    reason: reason,
+                    callback: runtime.onConfigurationError
+                )
+            }
+            print("[Issuetracker] crash report upload failed: \(err)")
         } catch {
             print("[Issuetracker] crash report upload failed: \(error)")
         }

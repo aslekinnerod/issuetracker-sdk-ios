@@ -22,7 +22,16 @@ struct NamePromptView: View {
             HStack(alignment: .center, spacing: Tokens.Space.s4) {
                 BrandHeader(
                     title: "One thing first",
-                    subtitle: "Stored only on this device."
+                    // This read "Stored only on this device." — a false
+                    // statement made directly to a data subject, in our own
+                    // UI, on the integrator's behalf: the value is sent to
+                    // the backend with every report, written onto the issue
+                    // as reporter.name and into its activity feed, and
+                    // forwarded to the customer's Jira/ADO/Trello as
+                    // "Reported by: <name>" (ITD-203). It also contradicted
+                    // the body copy twenty lines below, which was right all
+                    // along. Keep this subtitle true if it changes.
+                    subtitle: "Sent with the reports you file."
                 )
                 Button(action: onCancel) {
                     Image(systemName: "xmark")

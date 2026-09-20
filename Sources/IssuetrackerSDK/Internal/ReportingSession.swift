@@ -255,7 +255,13 @@ enum ReportingSession {
         videoURL: URL?,
         onState: @MainActor @escaping (IssueProgressState) -> Void
     ) async -> Result<Void, Error> {
-        struct CreateResult: Decodable { let issueId: String }
+        struct CreateResult: Decodable {
+            let issueId: String
+            // Renew-on-use (ADR-0005 Decision 10). Present only when
+            // this submission pushed the expiry out; absent means
+            // unchanged, never expired.
+            let testerTokenExpiresAt: Double?
+        }
         let machine = UploadProgressMachine(onState: onState)
         do {
             var payload: [String: Any] = [
@@ -318,6 +324,9 @@ enum ReportingSession {
                 onProgress: { fraction in machine.reportProgress(fraction) },
                 onProcessing: { machine.reportProcessing() }
             )
+            if let renewed = result.testerTokenExpiresAt {
+                AttestationStore.shared.adoptRenewedExpiry(millisecondsSince1970: renewed)
+            }
             machine.reportDone(issueId: result.issueId)
             return .success(())
         } catch let err as APIClient.CallableError {

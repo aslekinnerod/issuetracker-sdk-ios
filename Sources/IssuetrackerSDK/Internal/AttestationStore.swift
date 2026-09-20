@@ -11,9 +11,11 @@ import Foundation
 /// open) and dev/staging-prefixed keys fail OPEN. Conservative where
 /// real end users are, frictionless where people develop and QA.
 ///
-/// The token itself arrives from the companion-app handshake (phase
-/// 2); until that lands, hosts can inject one programmatically via
-/// ``Issuetracker/setTesterToken(_:expiresAt:)``.
+/// The token arrives from the companion-app handshake
+/// (``CompanionHandshake``), or is injected by the host via
+/// ``Issuetracker/setTesterToken(_:expiresAt:)`` — which is how our
+/// own dogfood builds attest on dev and staging keys, since no
+/// companion is published for those environments.
 @MainActor
 final class AttestationStore {
     static let shared = AttestationStore()
@@ -23,6 +25,13 @@ final class AttestationStore {
     private let configRequireKey = "io.issuetracker.sdk.remoteConfig.requireTesterAttestation"
     private let tokenKey = "io.issuetracker.sdk.testerToken"
     private let tokenExpiresKey = "io.issuetracker.sdk.testerTokenExpiresAt"
+    // ADR-0005 Decision 9: the token slot is apiKey-bound, mirroring
+    // the config cache line for line. Without this a token minted for
+    // one project survives a reconfigure onto another and gets
+    // attached to reports it has no business attesting — which the
+    // server rejects, so the visible symptom is a tester whose
+    // gestures work and whose reports silently fail.
+    private let tokenApiKeyKey = "io.issuetracker.sdk.testerTokenApiKey"
 
     private var currentApiKey: String?
     // nil = no fetched/cached value for the current key; fall back to
@@ -45,6 +54,28 @@ final class AttestationStore {
             // Reconfigured with a different key — a cached flag for the
             // old key must not leak onto the new project.
             known = nil
+        }
+        bindToken(apiKey: runtime.apiKey)
+    }
+
+    /// Resolves the stored token against the key now in force
+    /// (ADR-0005 Decision 9).
+    ///
+    /// Three cases, and the middle one is the reason this exists at
+    /// all: a token written BEFORE `configure()` — which
+    /// ``Issuetracker/setTesterToken(_:expiresAt:)`` explicitly
+    /// permits — is stored unbound, and the first configure adopts it.
+    /// A token bound to a different key is cleared, never carried
+    /// forward.
+    func bindToken(apiKey: String) {
+        guard defaults.string(forKey: tokenKey) != nil else { return }
+        switch defaults.string(forKey: tokenApiKeyKey) {
+        case apiKey:
+            break
+        case nil:
+            defaults.set(apiKey, forKey: tokenApiKeyKey)
+        default:
+            clearTesterToken()
         }
     }
 
@@ -104,10 +135,27 @@ final class AttestationStore {
     }
 
     /// Valid (non-expired) tester token, or nil.
+    ///
+    /// The expiry rule is unified across all four SDK stores
+    /// (ADR-0005 Decision 10): **absent or `<= 0` means no local
+    /// expiry; a positive expiry in the past means treat as absent
+    /// AND clear.** iOS previously read a stored `0` as
+    /// `Date(timeIntervalSince1970: 0)` — 1970, therefore expired —
+    /// which is the opposite of what Android and web have always done
+    /// with the same value.
+    ///
+    /// The clear is a write from a getter, which is unusual enough to
+    /// justify: it is the only self-healing path for a stale token.
+    /// Without it an expired token sits on disk forever, keeps being
+    /// attached to reports, and keeps being rejected — and the
+    /// renew-on-use extension that would have prevented the expiry
+    /// only fires on a token the server still accepts.
     var testerToken: String? {
         guard let token = defaults.string(forKey: tokenKey) else { return nil }
         if let expires = defaults.object(forKey: tokenExpiresKey) as? Double,
-           Date(timeIntervalSince1970: expires) < Date() {
+           expires > 0,
+           expires <= Date().timeIntervalSince1970 {
+            clearTesterToken()
             return nil
         }
         return token
@@ -115,6 +163,14 @@ final class AttestationStore {
 
     func setTesterToken(_ token: String, expiresAt: Date?) {
         defaults.set(token, forKey: tokenKey)
+        // Bound when a key is in force, unbound when the host called
+        // this before `configure()`. An unbound token is adopted by
+        // the next `install(runtime:)`.
+        if let currentApiKey {
+            defaults.set(currentApiKey, forKey: tokenApiKeyKey)
+        } else {
+            defaults.removeObject(forKey: tokenApiKeyKey)
+        }
         if let expiresAt {
             defaults.set(expiresAt.timeIntervalSince1970, forKey: tokenExpiresKey)
         } else {
@@ -122,9 +178,28 @@ final class AttestationStore {
         }
     }
 
+    /// Adopts a server-extended expiry (renew-on-use, ADR-0005
+    /// Decision 10). The server slides `expiresAt` out on any use
+    /// inside the renewal window and hands the new value back on the
+    /// ingest response; a client that ignored it would keep its old
+    /// expiry, treat a live token as dead, and re-handshake for
+    /// nothing.
+    ///
+    /// Only ever moves the expiry FORWARD, and only for a token that
+    /// is still there: a response arriving after a sign-out or a
+    /// reconfigure must not resurrect a slot that was cleared.
+    func adoptRenewedExpiry(millisecondsSince1970 ms: Double) {
+        guard ms > 0, defaults.string(forKey: tokenKey) != nil else { return }
+        let seconds = ms / 1000
+        let current = defaults.object(forKey: tokenExpiresKey) as? Double
+        guard current == nil || seconds > (current ?? 0) else { return }
+        defaults.set(seconds, forKey: tokenExpiresKey)
+    }
+
     func clearTesterToken() {
         defaults.removeObject(forKey: tokenKey)
         defaults.removeObject(forKey: tokenExpiresKey)
+        defaults.removeObject(forKey: tokenApiKeyKey)
     }
 
     /// Gesture-trigger gate. In testers-only mode without a token the

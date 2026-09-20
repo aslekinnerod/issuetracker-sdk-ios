@@ -102,13 +102,27 @@ enum CrashReporter {
             payload["testerToken"] = testerToken
         }
 
-        struct CreateResult: Decodable { let issueId: String }
+        struct CreateResult: Decodable {
+            let issueId: String
+            let testerTokenExpiresAt: Double?
+        }
         do {
-            let _: CreateResult = try await APIClient.call(
+            let result: CreateResult = try await APIClient.call(
                 endpoint: runtime.endpoint,
                 function: "createIssueFromSdk",
                 payload: payload
             )
+            // Renew-on-use applies here too, and on this path it is
+            // the one that matters most: an app that crashes on launch
+            // reaches this code and never reaches ReportingSession, so
+            // without it the only token this install can renew is the
+            // one belonging to a tester who is still able to file
+            // reports by hand.
+            if let renewed = result.testerTokenExpiresAt {
+                await MainActor.run {
+                    AttestationStore.shared.adoptRenewedExpiry(millisecondsSince1970: renewed)
+                }
+            }
         } catch let err as APIClient.CallableError {
             // ADR-0003 Decision 9 §1: dispatch on `details.error`, not
             // on the HTTP status, and do it on *every* path that talks
@@ -125,6 +139,16 @@ enum CrashReporter {
                     reason: reason,
                     callback: runtime.onConfigurationError
                 )
+            }
+            // A rejected token has to be dropped here as well as on
+            // the submit path. An app that crashes on launch never
+            // reaches `ReportingSession`, so the self-healing clear
+            // that lives there never runs for it — and the install
+            // would keep attaching a dead token to every crash upload
+            // for as long as it keeps crashing, which is precisely
+            // the install that uploads most.
+            if err.sdkErrorReason == .testerTokenInvalid {
+                await MainActor.run { AttestationStore.shared.clearTesterToken() }
             }
             print("[Issuetracker] crash report upload failed: \(err)")
         } catch {

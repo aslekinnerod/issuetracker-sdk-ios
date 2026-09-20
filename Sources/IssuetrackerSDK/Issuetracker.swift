@@ -69,6 +69,22 @@ public enum Issuetracker {
     ///     first launch that teaches the user which gestures trigger
     ///     the reporter — only the gestures currently enabled are
     ///     shown. Persisted per install via UserDefaults, so the
+    ///   - attestationCallbackURLScheme: The URL scheme the companion
+    ///     app answers on, which must be your own bundle identifier
+    ///     (ADR-0005 Decision 11). Required only for projects using
+    ///     tester-only reporting, and only on iOS. Three lines of
+    ///     integration go with it, all in your Info.plist:
+    ///     `LSApplicationQueriesSchemes` must list
+    ///     `issuetracker-testers`, `CFBundleURLTypes` must register
+    ///     `CFBundleURLSchemes = $(PRODUCT_BUNDLE_IDENTIFIER)`, and
+    ///     your app must forward incoming URLs to
+    ///     ``Issuetracker/handleAttestationCallback(_:)``. Leave it
+    ///     nil and the SDK never opens the companion — which is the
+    ///     right setting for every project in open mode.
+    ///   - showOnboarding: If `true`, presents a one-time popover on
+    ///     first launch that teaches the user which gestures trigger
+    ///     the reporter — only the gestures currently enabled are
+    ///     shown. Persisted per install via UserDefaults, so the
     ///     popover never appears twice unless the host app calls
     ///     ``Issuetracker/showOnboarding()`` explicitly. With both
     ///     `shakeToReport` and `longPressToReport` disabled the
@@ -83,6 +99,7 @@ public enum Issuetracker {
         showReportButton: Bool = false,
         enableCrashReporting: Bool = true,
         onConfigurationError: ((SdkErrorReason) -> Void)? = nil,
+        attestationCallbackURLScheme: String? = nil,
         showOnboarding: Bool = false,
         terminatedUI: TerminatedUiStrings? = nil
     ) {
@@ -98,6 +115,7 @@ public enum Issuetracker {
         // first gesture consults real data when we have any. The
         // network refresh runs async below.
         AttestationStore.shared.install(runtime: rt)
+        CompanionHandshake.install(callbackURLScheme: attestationCallbackURLScheme)
         // Gesture triggers are gated per-fire rather than at install
         // time: config can flip while the app runs, and a fire-time
         // check reconciles instantly with no uninstall plumbing. In
@@ -106,16 +124,10 @@ public enum Issuetracker {
         // deliberately ungated — a host app's own button should
         // surface the attestation message instead.
         if shakeToReport {
-            ShakeObserver.install {
-                guard AttestationStore.shared.canTriggerReport else { return }
-                Self.report()
-            }
+            ShakeObserver.install { Self.fireTrigger(runtime: rt) }
         }
         if longPressToReport {
-            LongPressObserver.install {
-                guard AttestationStore.shared.canTriggerReport else { return }
-                Self.report()
-            }
+            LongPressObserver.install { Self.fireTrigger(runtime: rt) }
         }
         // ADR-0008 accessible activation paths. Applied unconditionally
         // (unlike the fire-time-gated gestures) so a re-configure flips
@@ -200,6 +212,62 @@ public enum Issuetracker {
             shakeEnabled: ShakeObserver.isInstalled,
             longPressEnabled: LongPressObserver.isInstalled
         )
+    }
+
+    /// What a gesture trigger actually does.
+    ///
+    /// Three outcomes, and the middle one is the whole iOS handshake:
+    ///
+    ///  - attested (or open mode): open the reporter, as always;
+    ///  - testers-only, no token, **and the companion app is
+    ///    installed**: start the handshake, and open the reporter when
+    ///    it comes back attested;
+    ///  - anything else: nothing at all.
+    ///
+    /// The third case is ADR-0005 invariant 5 — triggers are silently
+    /// inert for anyone who is not a tester, with no UI and no hint
+    /// the SDK is there. The second case is why `canOpenURL` exists in
+    /// this design: someone with the companion installed is plausibly
+    /// a tester, and someone without it is not, so presence is what
+    /// decides whether activation is offered at all.
+    ///
+    /// Without this the feature would be unreachable: a tester whose
+    /// gestures are inert until they hold a token, and who can only
+    /// get a token through a gesture, has no way in.
+    @MainActor
+    private static func fireTrigger(runtime: Runtime) {
+        if AttestationStore.shared.canTriggerReport {
+            Self.report()
+            return
+        }
+        CompanionHandshake.offerIfNeeded(runtime: runtime, resumeReport: true)
+    }
+
+    /// Hands the SDK a URL your app was opened with, and returns
+    /// whether it was one of ours.
+    ///
+    /// Call it from `onOpenURL` (SwiftUI) or
+    /// `application(_:open:options:)` (UIKit) and pass every URL
+    /// through — the SDK recognises its own and ignores the rest, so
+    /// there is nothing to match on first:
+    ///
+    /// ```swift
+    /// .onOpenURL { url in
+    ///     Issuetracker.handleAttestationCallback(url)
+    /// }
+    /// ```
+    ///
+    /// Required only alongside
+    /// `configure(attestationCallbackURLScheme:)`. Returning `true`
+    /// means the SDK consumed the URL; it does **not** mean
+    /// activation succeeded, and there is deliberately no callback
+    /// for that — a tester who was refused has already been told why
+    /// by the companion app, on its own screen, and the host app must
+    /// not show anything to someone who turns out not to be a tester.
+    @MainActor
+    @discardableResult
+    public static func handleAttestationCallback(_ url: URL) -> Bool {
+        CompanionHandshake.handle(url, runtime: runtime)
     }
 
     /// Programmatically triggers the reporter — useful for a "report
